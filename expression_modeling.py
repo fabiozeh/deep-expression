@@ -70,7 +70,7 @@ class Mode:
 
 
 class Piece:
-    def __init__(self, parts=None, key=Note.C, mode=Mode.major, name='untitled'):
+    def __init__(self, parts=None, key=Note.C, mode=Mode.major, name='untitled', dynMean=-30, dynStd=7):
         if parts is None:
             self.parts = {}
         else:
@@ -78,6 +78,8 @@ class Piece:
         self.key = key
         self.mode = mode
         self.name = name
+        self.dynMean = dynMean
+        self.dynStd = dynStd
 
 
 class Dataset:
@@ -419,6 +421,172 @@ def metricStrength(n):
         return '1'
     else:
         return '0'
+
+
+def toMotifDataframe(piece, instrument, dataframe=None):
+    if dataframe is None:
+        dataframe = {
+            'beatInMeasure': [],
+            'metricStrength': [],
+            'numberOfNotes': [],
+            'duration': [],
+            'locationInPiece': [],
+            'pitchX2': [],
+            'pitchX1': [],
+            'pitchX0': [],
+            'pitchContourX2': [],
+            'pitchContourX1': [],
+            'pitchContourX0': [],
+            'rhythmDrops': [],
+            'rhythmRises': [],
+            'rhythmContourX2': [],
+            'rhythmContourX1': [],
+            'rhythmContourX0': [],
+            'locationStrongestNote': [],
+            'pieceKey': [],
+            'pieceMode': [],
+            'probChord_I': [],
+            'probChord_II': [],
+            'probChord_III': [],
+            'probChord_IV': [],
+            'probChord_V': [],
+            'probChord_VI': [],
+            'probChord_VII': [],
+            'initalChord': [],
+            'finalChord': [],
+            'hasDissonance': [],
+            'dissonanceLocation': [],
+            'isSoloPiece': [],
+            'pieceId': [],
+            'motifId': [],
+            'pieceDynMean': [],
+            'pieceDynStd': [],
+            'dynamicsX2': [],
+            'dynamicsX1': [],
+            'dynamicsX0': []
+        }
+    motifs = groupMotifs(piece.parts[instrument])
+    dynamicsLevels = []
+
+    print('piece={p}, {m} motifs'.format(p=piece.name, m=len(motifs)))
+
+#    vals = np.zeros(shape=(len(motifs), len(dataset.attributes)), dtype=object)
+#    allLevels = [[], '', -1] * len(motifs)
+
+    startInd = 0
+    totalBeats = piece.parts[instrument][-1].startBeat + piece.parts[instrument][-1].durBeats
+    for i in range(0, len(motifs)):
+        sb = piece.parts[instrument][startInd].startBeat
+        motif = piece.parts[instrument][startInd:motifs[i]]
+        x = np.linspace(0, 1, len(motif))
+
+        dataframe['beatInMeasure'].append(sb % 4)
+        dataframe['metricStrength'].append(metricStrength(motif[0]))
+        dataframe['numberOfNotes'].append(motifs[i] - startInd)
+
+        if motifs[i] < len(piece.parts[instrument]):
+            dataframe['duration'].append(piece.parts[instrument][motifs[i]].startBeat - sb)
+        else:
+            last = piece.parts[instrument][motifs[i] - 1]
+            dataframe['duration'].append(last.startBeat + last.durBeats - sb)
+
+        dataframe['locationInPiece'].append(sb / totalBeats)
+
+        # pitch curve coefficients:
+        pitches = np.array([n.pitch for n in motif])
+        coeff = np.polyfit(x, pitches - min(pitches), 2 if len(x) > 2 else 1)
+        coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
+        dataframe['pitchX2'].append(coeff[0])
+        dataframe['pitchX1'].append(coeff[1])
+        dataframe['pitchX0'].append(coeff[2])
+
+        pContour = pitchContour(motif)
+        coeff = np.polyfit(x, pContour, 2 if len(x) > 2 else 1)
+        coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
+        dataframe['pitchContourX2'].append(coeff[0])
+        dataframe['pitchContourX1'].append(coeff[1])
+        dataframe['pitchContourX0'].append(coeff[2])
+
+        # rhythmic descriptors
+        rhContour = np.array([n.ioiBeats / n.prevNote.ioiBeats if n.prevNote is not None else 1 for n in motif])
+        dataframe['rhythmDrops'].append(max(rhContour) > 1)
+        dataframe['rhythmRises'].append(min(rhContour) < 1)
+
+        # rhythmic contour coefficients
+        coeff = np.polyfit(x, rhContour, 2 if len(x) > 2 else 1)
+        coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
+        dataframe['rhythmContourX2'].append(coeff[0])
+        dataframe['rhythmContourX1'].append(coeff[1])
+        dataframe['rhythmContourX0'].append(coeff[2])
+
+        ms = [''] * len(motif)
+        for j, nt in enumerate(motif):
+            ms[j] = metricStrength(nt)
+        dataframe['locationStrongestNote'].append((motif[np.argmax(ms)].startBeat - sb) / (motif[-1].startBeat - sb))
+
+        dataframe['pieceKey'].append(keyInFifths(piece.key))
+        dataframe['pieceMode'].append('Major' if piece.mode == Mode.major else 'Minor')
+
+        # chord probabilities
+        _, probs = estimateChord(np.asarray([n.allPitches for n in motif]).flatten(), piece.key, piece.mode)
+        dataframe['probChord_I'].append(probs[0])
+        dataframe['probChord_II'].append(probs[1])
+        dataframe['probChord_III'].append(probs[2])
+        dataframe['probChord_IV'].append(probs[3])
+        dataframe['probChord_V'].append(probs[4])
+        dataframe['probChord_VI'].append(probs[5])
+        dataframe['probChord_VII'].append(probs[6])
+
+        # initial / final chord
+        ch, _ = estimateChord(motif[0].allPitches, piece.key, piece.mode)
+        dataframe['initalChord'].append(str(ch))
+        ch, _ = estimateChord(motif[-1].allPitches, piece.key, piece.mode)
+        dataframe['finalChord'].append(str(ch))
+
+        # hasDissonance / dissonanceLocation
+        dataframe['hasDissonance'].append(False)
+        dataframe['dissonanceLocation'].append(0)
+        for j in range(0, len(motif)):
+            if isDissonance(motif[j].pitch, piece.key, piece.mode):
+                dataframe['hasDissonance'][-1] = True
+                dataframe['dissonanceLocation'][-1] = x[j]
+                break
+
+        dataframe['isSoloPiece'].append(len(piece.parts) <= 1)
+        dataframe['pieceId'].append(int(piece.name.split('.')[0]))
+        dataframe['motifId'].append(i)
+        dataframe['pieceDynMean'].append(piece.dynMean)
+        dataframe['pieceDynStd'].append(piece.dynStd)
+
+        # dynamics curve coefficients
+        levels = []
+        coeff = [0] * 3
+        for n in motif:
+            levels += list(n.levels)
+        if len(levels) > 2:
+            coeff = np.polyfit(np.linspace(0, 1, len(levels)), levels, 2)
+        elif len(levels) > 1:
+            coeff[0] = 0
+            coeff[1:] = np.polyfit(np.linspace(0, 1, len(levels)), levels, 1)
+        elif len(levels) == 1:
+            coeff[0:1] = [0, 0]
+            coeff[2] = levels[0]
+        else:
+            coeff[0:1] = [0, 0]
+            coeff[2] = - np.inf
+        dataframe['dynamicsX2'].append(coeff[0])
+        dataframe['dynamicsX1'].append(coeff[1])
+        dataframe['dynamicsX0'].append(coeff[2])
+
+        # timing deviation curve descriptors (TODO)
+
+        # storing levels for error calculation
+        dynamicsLevels.append(levels)
+
+        # update start index
+        startInd = motifs[i]
+
+    return dataframe, dynamicsLevels
 
 
 def toMotifDataset(piece, instrument, dataset=None):
