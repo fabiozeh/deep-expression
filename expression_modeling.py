@@ -1,5 +1,6 @@
 import re
 import math
+import sys
 
 import numpy as np
 
@@ -123,10 +124,11 @@ class Dataset:
 #
 
 
-def buildNoteParts(notearray, levels, srate):
+def buildNoteParts(notearray, levels, srate, instruments=None):
     parts = {}
     # instruments in this piece
-    instruments = set(notearray['instrument'])
+    if instruments is None:
+        instruments = set(notearray['instrument'])
     for i in instruments:
         X = []  # melody notes array
         runningMelody = False
@@ -273,7 +275,7 @@ def estimateChord(pitches, key, mode):
     candidates = np.array([
         np.sum(np.isin([0, 4, 7], pitches)) / len(pitches),
         np.sum(np.isin([2, 5, 9], pitches)) / len(pitches),
-        np.sum(np.isin([4, 7, 11], pitches)) / len(pitches),
+        np.sum(np.isin([4, 7, 8, 11], pitches)) / len(pitches),  # 8 from harmonic minor implies V/vi
         np.sum(np.isin([5, 9, 0], pitches)) / len(pitches),
         np.sum(np.isin([7, 11, 2], pitches)) / len(pitches),
         np.sum(np.isin([9, 0, 4], pitches)) / len(pitches),
@@ -283,11 +285,19 @@ def estimateChord(pitches, key, mode):
     return np.argmax(candidates), candidates
 
 
+def bassNote(pitches):
+    return np.min(pitches) % 12
+
+
 def isDissonance(pitch, key, mode):
+    return dissonancePresent([pitch], key, mode)
+
+
+def dissonancePresent(pitches, key, mode):
     lookup = [0, 2, 4, 5, 7, 9, 11]
     scale = (key - lookup[mode] + 12) % 12
-    pitch = (pitch - scale + 12) % 12
-    return not np.isin(pitch, lookup).item()
+    pitches = [(p - scale + 12) % 12 for p in pitches]
+    return not np.all(np.isin(pitches, lookup))
 
 #
 # Timing calculations
@@ -322,8 +332,8 @@ def computeTimingDev(piece):
     for note in allnotes:
         if note.prevNote is None:
             continue
-        localT = meanTempo([n for n in allnotes if n.startBeat < note.startBeat and
-                            n.startBeat >= note.startBeat - 4])
+        localT = meanTempo([n for n in allnotes if n.startBeat < note.startBeat
+                            and n.startBeat >= note.startBeat - 4])
         predOnset = note.prevNote.startTime + \
             (note.startBeat - note.prevNote.startBeat) / localT
         note.timingDev = note.startTime - predOnset
@@ -377,9 +387,9 @@ def boundaries(part):
 def groupMotifs(part, bounds=None, offset=0):
     if bounds is None:
         bounds = boundaries(part)
-    max_notes = 10
+    max_notes = 32
     ind = 0
-    if (len(part) <= max_notes):
+    if (len(part) <= max_notes / 2):
         ind = 0  # no split
     else:
         z = np.asanyarray(bounds[2:-2])
@@ -387,12 +397,12 @@ def groupMotifs(part, bounds=None, offset=0):
         if std != 0:
             z = (z - z.mean()) / std
             ind = np.argmax(z)
-            ind = ind + 2 if z[ind] > 2 else 0
+            ind = ind + 2 if z[ind] > 2 or len(part) > max_notes else 0
     if ind == 0:
         return [len(part) + offset]
     else:
-        return (groupMotifs(part[0:ind], bounds[0:ind], offset) +
-                groupMotifs(part[ind:], bounds[ind:], offset + ind))
+        return (groupMotifs(part[0:ind], bounds[0:ind], offset)
+                + groupMotifs(part[ind:], bounds[ind:], offset + ind))
 
 
 #
@@ -426,10 +436,12 @@ def metricStrength(n):
 def toMotifDataframe(piece, instrument, dataframe=None):
     if dataframe is None:
         dataframe = {
+            'startTime': [],
             'beatInMeasure': [],
             'metricStrength': [],
             'numberOfNotes': [],
             'duration': [],
+            'durationSecs': [],
             'locationInPiece': [],
             'pitchX2': [],
             'pitchX1': [],
@@ -442,6 +454,7 @@ def toMotifDataframe(piece, instrument, dataframe=None):
             'rhythmContourX2': [],
             'rhythmContourX1': [],
             'rhythmContourX0': [],
+            'boundaryValue': [],
             'locationStrongestNote': [],
             'pieceKey': [],
             'pieceMode': [],
@@ -452,7 +465,7 @@ def toMotifDataframe(piece, instrument, dataframe=None):
             'probChord_V': [],
             'probChord_VI': [],
             'probChord_VII': [],
-            'initalChord': [],
+            'initialChord': [],
             'finalChord': [],
             'hasDissonance': [],
             'dissonanceLocation': [],
@@ -465,10 +478,13 @@ def toMotifDataframe(piece, instrument, dataframe=None):
             'dynamicsX1': [],
             'dynamicsX0': []
         }
-    motifs = groupMotifs(piece.parts[instrument])
+    boundaryVals = boundaries(piece.parts[instrument])
+    isSolo = not any([len(x.otherVoices) > 0 for x in piece.parts[instrument]])
+    motifs = groupMotifs(piece.parts[instrument], bounds=boundaryVals)
     dynamicsLevels = []
 
-    print('piece={p}, {m} motifs'.format(p=piece.name, m=len(motifs)))
+    sys.stdout.write('piece=' + piece.name)
+    sys.stdout.flush()
 
 #    vals = np.zeros(shape=(len(motifs), len(dataset.attributes)), dtype=object)
 #    allLevels = [[], '', -1] * len(motifs)
@@ -477,322 +493,132 @@ def toMotifDataframe(piece, instrument, dataframe=None):
     totalBeats = piece.parts[instrument][-1].startBeat + piece.parts[instrument][-1].durBeats
     for i in range(0, len(motifs)):
         sb = piece.parts[instrument][startInd].startBeat
-        motif = piece.parts[instrument][startInd:motifs[i]]
-        x = np.linspace(0, 1, len(motif))
+        st = piece.parts[instrument][startInd].startTime
+        incl = 0  # extra included motifs (for dataset augmentation)
+        incl_flag = True
+        while incl_flag:
+            incl_flag = i + incl < len(motifs)
+            if incl_flag:
+                if motifs[i + incl] < len(piece.parts[instrument]):
+                    dur = (piece.parts[instrument][motifs[i + incl]].startBeat - sb)
+                else:
+                    last = piece.parts[instrument][motifs[i + incl] - 1]
+                    dur = last.startBeat + last.durBeats - sb
+                incl_flag = incl_flag and (incl == 0 or dur <= 8)
+            if incl_flag:
+                motif = piece.parts[instrument][startInd:motifs[i + incl]]
+                x = np.linspace(0, 1, len(motif))
 
-        dataframe['beatInMeasure'].append(sb % 4)
-        dataframe['metricStrength'].append(metricStrength(motif[0]))
-        dataframe['numberOfNotes'].append(motifs[i] - startInd)
+                dataframe['startTime'].append(st)
+                dataframe['beatInMeasure'].append(sb % 4)
+                dataframe['metricStrength'].append(metricStrength(motif[0]))
+                dataframe['numberOfNotes'].append(motifs[i + incl] - startInd)
+                dataframe['duration'].append(dur)
+                if motifs[i + incl] < len(piece.parts[instrument]):
+                    dataframe['durationSecs'].append(piece.parts[instrument][motifs[i + incl]].startTime - st)
+                else:
+                    last = piece.parts[instrument][motifs[i + incl] - 1]
+                    dataframe['durationSecs'].append(last.startTime + last.durS - st)
+                dataframe['locationInPiece'].append(sb / totalBeats)
 
-        if motifs[i] < len(piece.parts[instrument]):
-            dataframe['duration'].append(piece.parts[instrument][motifs[i]].startBeat - sb)
-        else:
-            last = piece.parts[instrument][motifs[i] - 1]
-            dataframe['duration'].append(last.startBeat + last.durBeats - sb)
+                # pitch curve coefficients:
+                pitches = np.array([n.pitch for n in motif])
+                coeff = np.polyfit(x, pitches - min(pitches), 2 if len(x) > 2 else 1)
+                coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
+                dataframe['pitchX2'].append(coeff[0])
+                dataframe['pitchX1'].append(coeff[1])
+                dataframe['pitchX0'].append(coeff[2])
 
-        dataframe['locationInPiece'].append(sb / totalBeats)
+                pContour = pitchContour(motif)
+                coeff = np.polyfit(x, pContour, 2 if len(x) > 2 else 1)
+                coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
+                dataframe['pitchContourX2'].append(coeff[0])
+                dataframe['pitchContourX1'].append(coeff[1])
+                dataframe['pitchContourX0'].append(coeff[2])
 
-        # pitch curve coefficients:
-        pitches = np.array([n.pitch for n in motif])
-        coeff = np.polyfit(x, pitches - min(pitches), 2 if len(x) > 2 else 1)
-        coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-        dataframe['pitchX2'].append(coeff[0])
-        dataframe['pitchX1'].append(coeff[1])
-        dataframe['pitchX0'].append(coeff[2])
+                # phrase separation criteria
+                dataframe['boundaryValue'].append(boundaryVals[startInd])
 
-        pContour = pitchContour(motif)
-        coeff = np.polyfit(x, pContour, 2 if len(x) > 2 else 1)
-        coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-        dataframe['pitchContourX2'].append(coeff[0])
-        dataframe['pitchContourX1'].append(coeff[1])
-        dataframe['pitchContourX0'].append(coeff[2])
+                # rhythmic descriptors
+                rhContour = np.array([n.ioiBeats / n.prevNote.ioiBeats if n.prevNote is not None else 1 for n in motif])
+                dataframe['rhythmDrops'].append(max(rhContour) > 1)
+                dataframe['rhythmRises'].append(min(rhContour) < 1)
 
-        # rhythmic descriptors
-        rhContour = np.array([n.ioiBeats / n.prevNote.ioiBeats if n.prevNote is not None else 1 for n in motif])
-        dataframe['rhythmDrops'].append(max(rhContour) > 1)
-        dataframe['rhythmRises'].append(min(rhContour) < 1)
+                # rhythmic contour coefficients
+                coeff = np.polyfit(x, rhContour, 2 if len(x) > 2 else 1)
+                coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
+                dataframe['rhythmContourX2'].append(coeff[0])
+                dataframe['rhythmContourX1'].append(coeff[1])
+                dataframe['rhythmContourX0'].append(coeff[2])
 
-        # rhythmic contour coefficients
-        coeff = np.polyfit(x, rhContour, 2 if len(x) > 2 else 1)
-        coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-        dataframe['rhythmContourX2'].append(coeff[0])
-        dataframe['rhythmContourX1'].append(coeff[1])
-        dataframe['rhythmContourX0'].append(coeff[2])
+                ms = [''] * len(motif)
+                for j, nt in enumerate(motif):
+                    ms[j] = metricStrength(nt)
+                dataframe['locationStrongestNote'].append((motif[np.argmax(ms)].startBeat - sb) / (motif[-1].startBeat - sb))
 
-        ms = [''] * len(motif)
-        for j, nt in enumerate(motif):
-            ms[j] = metricStrength(nt)
-        dataframe['locationStrongestNote'].append((motif[np.argmax(ms)].startBeat - sb) / (motif[-1].startBeat - sb))
+                dataframe['pieceKey'].append(keyInFifths(piece.key))
+                dataframe['pieceMode'].append('Major' if piece.mode == Mode.major else 'Minor')
 
-        dataframe['pieceKey'].append(keyInFifths(piece.key))
-        dataframe['pieceMode'].append('Major' if piece.mode == Mode.major else 'Minor')
+                # chord probabilities
+                _, probs = estimateChord(np.asarray([n.allPitches for n in motif]).flatten(), piece.key, piece.mode)
+                dataframe['probChord_I'].append(probs[0])
+                dataframe['probChord_II'].append(probs[1])
+                dataframe['probChord_III'].append(probs[2])
+                dataframe['probChord_IV'].append(probs[3])
+                dataframe['probChord_V'].append(probs[4])
+                dataframe['probChord_VI'].append(probs[5])
+                dataframe['probChord_VII'].append(probs[6])
 
-        # chord probabilities
-        _, probs = estimateChord(np.asarray([n.allPitches for n in motif]).flatten(), piece.key, piece.mode)
-        dataframe['probChord_I'].append(probs[0])
-        dataframe['probChord_II'].append(probs[1])
-        dataframe['probChord_III'].append(probs[2])
-        dataframe['probChord_IV'].append(probs[3])
-        dataframe['probChord_V'].append(probs[4])
-        dataframe['probChord_VI'].append(probs[5])
-        dataframe['probChord_VII'].append(probs[6])
+                # initial / final chord
+                ch, _ = estimateChord(motif[0].allPitches, piece.key, piece.mode)
+                dataframe['initialChord'].append(str(ch))
+                ch, _ = estimateChord(motif[-1].allPitches, piece.key, piece.mode)
+                dataframe['finalChord'].append(str(ch))
 
-        # initial / final chord
-        ch, _ = estimateChord(motif[0].allPitches, piece.key, piece.mode)
-        dataframe['initalChord'].append(str(ch))
-        ch, _ = estimateChord(motif[-1].allPitches, piece.key, piece.mode)
-        dataframe['finalChord'].append(str(ch))
+                # hasDissonance / dissonanceLocation
+                dataframe['hasDissonance'].append(False)
+                dataframe['dissonanceLocation'].append(-1)
+                for j in range(0, len(motif)):
+                    if isDissonance(motif[j].pitch, piece.key, piece.mode):
+                        dataframe['hasDissonance'][-1] = True
+                        dataframe['dissonanceLocation'][-1] = x[j]
+                        break
 
-        # hasDissonance / dissonanceLocation
-        dataframe['hasDissonance'].append(False)
-        dataframe['dissonanceLocation'].append(0)
-        for j in range(0, len(motif)):
-            if isDissonance(motif[j].pitch, piece.key, piece.mode):
-                dataframe['hasDissonance'][-1] = True
-                dataframe['dissonanceLocation'][-1] = x[j]
-                break
+                dataframe['isSoloPiece'].append(isSolo)
+                dataframe['pieceId'].append(int(piece.name.split('.')[0]))
+                dataframe['motifId'].append(len(dynamicsLevels))
+                dataframe['pieceDynMean'].append(piece.dynMean)
+                dataframe['pieceDynStd'].append(piece.dynStd)
 
-        dataframe['isSoloPiece'].append(len(piece.parts) <= 1)
-        dataframe['pieceId'].append(int(piece.name.split('.')[0]))
-        dataframe['motifId'].append(i)
-        dataframe['pieceDynMean'].append(piece.dynMean)
-        dataframe['pieceDynStd'].append(piece.dynStd)
+                # dynamics curve coefficients
+                levels = []
+                coeff = [0] * 3
+                for n in motif:
+                    levels += list(n.levels)
+                if len(levels) > 2:
+                    coeff = np.polyfit(np.linspace(0, 1, len(levels)), levels, 2)
+                elif len(levels) > 1:
+                    coeff[0] = 0
+                    coeff[1:] = np.polyfit(np.linspace(0, 1, len(levels)), levels, 1)
+                elif len(levels) == 1:
+                    coeff[0:1] = [0, 0]
+                    coeff[2] = levels[0]
+                else:
+                    coeff[0:1] = [0, 0]
+                    coeff[2] = - np.inf
+                dataframe['dynamicsX2'].append(coeff[0])
+                dataframe['dynamicsX1'].append(coeff[1])
+                dataframe['dynamicsX0'].append(coeff[2])
 
-        # dynamics curve coefficients
-        levels = []
-        coeff = [0] * 3
-        for n in motif:
-            levels += list(n.levels)
-        if len(levels) > 2:
-            coeff = np.polyfit(np.linspace(0, 1, len(levels)), levels, 2)
-        elif len(levels) > 1:
-            coeff[0] = 0
-            coeff[1:] = np.polyfit(np.linspace(0, 1, len(levels)), levels, 1)
-        elif len(levels) == 1:
-            coeff[0:1] = [0, 0]
-            coeff[2] = levels[0]
-        else:
-            coeff[0:1] = [0, 0]
-            coeff[2] = - np.inf
-        dataframe['dynamicsX2'].append(coeff[0])
-        dataframe['dynamicsX1'].append(coeff[1])
-        dataframe['dynamicsX0'].append(coeff[2])
+                # timing deviation curve descriptors (TODO)
 
-        # timing deviation curve descriptors (TODO)
+                # storing levels for error calculation
+                dynamicsLevels.append(levels)
 
-        # storing levels for error calculation
-        dynamicsLevels.append(levels)
+                incl += 1
 
         # update start index
         startInd = motifs[i]
 
+    print(', {m} motifs'.format(m=len(dataframe['startTime'])))
     return dataframe, dynamicsLevels
-
-
-def toMotifDataset(piece, instrument, dataset=None):
-    '''  Generates or appends to an ARFF object with data from the piece:
-    start beat mod 4 (can we do time signature discovery?)
-    metric strength of first note (sergio's scale)
-    number of notes
-    motif duration (beats)
-    start beat / total beats (where in the piece)
-    pitch contour polyfit
-    rhythmic contour polyfit
-    aggregate pitches chord probs
-    piece key
-    chords before / after strong beat
-    dissonance presence
-    dissonance location (normalized in beat axis)
-'''
-    if dataset is None:
-        dataset = Dataset()
-
-    if not dataset.attributes:
-        dataset.attributes = [
-            ('beatInMeasure', 'REAL'),
-            ('metricStrength', ['3', '2', '1', '0']),
-            ('numberOfNotes', 'INTEGER'),
-            ('duration', 'REAL'),
-            ('locationInPiece', 'REAL'),
-            ('pitchX2', 'REAL'),
-            ('pitchX1', 'REAL'),
-            ('pitchX0', 'REAL'),
-            ('pitchContourX2', 'REAL'),
-            ('pitchContourX1', 'REAL'),
-            ('pitchContourX0', 'REAL'),
-            ('rhythmDrops', ['TRUE', 'FALSE']),
-            ('rhythmRises', ['TRUE', 'FALSE']),
-            ('rhythmContourX2', 'REAL'),
-            ('rhythmContourX1', 'REAL'),
-            ('rhythmContourX0', 'REAL'),
-            ('locationStrongestNote', 'REAL'),
-            ('pieceKey', 'INTEGER'),  # ['-5', '-4', '-3', '-2', '-1', '0', '1', '2', '3', '4', '5']
-            ('pieceMode', ['Major', 'Minor']),
-            ('probChord_I', 'REAL'),
-            ('probChord_II', 'REAL'),
-            ('probChord_III', 'REAL'),
-            ('probChord_IV', 'REAL'),
-            ('probChord_V', 'REAL'),
-            ('probChord_VI', 'REAL'),
-            ('probChord_VII', 'REAL'),
-            ('initalChord', ['0', '1', '2', '3', '4', '5', '6']),
-            ('finalChord', ['0', '1', '2', '3', '4', '5', '6']),
-            ('hasDissonance', ['TRUE', 'FALSE']),
-            ('dissonanceLocation', 'REAL'),
-            ('isSoloPiece', ['TRUE', 'FALSE']),
-            ('pieceId', 'INTEGER'),
-            ('motifId', 'INTEGER'),
-            ('dynamicsX2', 'REAL'),
-            ('dynamicsX1', 'REAL'),
-            ('dynamicsX0', 'REAL')
-            # ('timingX2', 'REAL'),
-            # ('timingX1', 'REAL'),
-            # ('timingX0', 'REAL')
-        ]
-
-    # 'f, i, i, f, f, f, f, f, f, f, f, f, f, f, i, U5, f, f, f, f, f, f, f, i, i, U5, f, f, f, f, f, f, f'
-    motifs = groupMotifs(piece.parts[instrument])
-
-    print('piece={p}, {m} motifs'.format(p=piece.name, m=len(motifs)))
-
-    vals = np.zeros(shape=(len(motifs), len(dataset.attributes)), dtype=object)
-    allLevels = [[], '', -1] * len(motifs)
-
-    startInd = 0
-    totalBeats = piece.parts[instrument][-1].startBeat + piece.parts[instrument][-1].durBeats
-    for i in range(0, len(motifs)):
-        sb = piece.parts[instrument][startInd].startBeat
-        motif = piece.parts[instrument][startInd:motifs[i]]
-        x = np.linspace(0, 1, len(motif))
-
-        idx = 0
-        # beatInMeasure:
-        vals[i, idx] = sb % 4
-        idx = idx + 1
-
-        # metricStrength:
-        vals[i, idx] = metricStrength(motif[0])
-        idx = idx + 1
-
-        # numberOfNotes:
-        vals[i, idx] = motifs[i] - startInd
-        idx = idx + 1
-
-        # duration:
-        if motifs[i] < len(piece.parts[instrument]):
-            vals[i, idx] = piece.parts[instrument][motifs[i]].startBeat - sb
-        else:
-            last = piece.parts[instrument][motifs[i] - 1]
-            vals[i, idx] = last.startBeat + last.durBeats - sb
-        idx = idx + 1
-
-        # locationInPiece:
-        vals[i, idx] = sb / totalBeats
-        idx = idx + 1
-
-        # pitch curve coefficients:
-        pitches = np.array([n.pitch for n in motif])
-        coeff = np.polyfit(x, pitches - min(pitches), 2 if len(x) > 2 else 1)
-        vals[i, idx:idx + 3] = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-        idx = idx + 3
-
-        pContour = pitchContour(motif)
-        coeff = np.polyfit(x, pContour, 2 if len(x) > 2 else 1)
-        vals[i, idx:idx + 3] = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-        idx = idx + 3
-
-        # rhythmic descriptors
-        rhContour = np.array([n.ioiBeats / n.prevNote.ioiBeats if n.prevNote is not None else 1 for n in motif])
-        vals[i, idx] = 'TRUE' if max(rhContour) > 1 else 'FALSE'  # rhythm drops
-        idx = idx + 1
-        vals[i, idx] = 'TRUE' if min(rhContour) < 1 else 'FALSE'  # rhythm rises
-        idx = idx + 1
-
-        # rhythmic contour coefficients
-        coeff = np.polyfit(x, rhContour, 2 if len(x) > 2 else 1)
-        vals[i, idx:idx + 3] = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-        idx = idx + 3
-
-        # locationStrongestNote
-        ms = [''] * len(motif)
-        for j, nt in enumerate(motif):
-            ms[j] = metricStrength(nt)
-        vals[i, idx] = (motif[np.argmax(ms)].startBeat - sb) / (motif[-1].startBeat - sb)
-        idx = idx + 1
-
-        # piece key and mode
-        vals[i, idx] = keyInFifths(piece.key)
-        idx = idx + 1
-        vals[i, idx] = 'Major' if piece.mode == Mode.major else 'Minor'
-        idx = idx + 1
-
-        # chord probabilities
-        _, probs = estimateChord(np.asarray([n.allPitches for n in motif]).flatten(), piece.key, piece.mode)
-        vals[i, idx:idx + 7] = probs
-        idx = idx + 7
-
-        # initial / final chord
-        ch, _ = estimateChord(motif[0].allPitches, piece.key, piece.mode)
-        vals[i, idx] = str(ch)
-        idx = idx + 1
-        ch, _ = estimateChord(motif[-1].allPitches, piece.key, piece.mode)
-        vals[i, idx] = str(ch)
-        idx = idx + 1
-
-        # hasDissonance / dissonanceLocation
-        vals[i, idx] = 'FALSE'
-        for j in range(0, len(motif)):
-            if isDissonance(motif[j].pitch, piece.key, piece.mode):
-                vals[i, idx] = 'TRUE'
-                vals[i, idx + 1] = x[j]
-                break
-        idx = idx + 2
-
-        # isSoloPiece
-        vals[i, idx] = 'FALSE' if len(piece.parts) > 1 else 'TRUE'
-        idx = idx + 1
-
-        # piece/motif ID
-        vals[i, idx] = int(piece.name.split('.')[0])
-        idx = idx + 1
-        vals[i, idx] = i
-        idx = idx + 1
-
-        # dynamics curve coefficients
-        levels = []
-        for n in motif:
-            levels += list(n.levels)
-        if len(levels) > 2:
-            vals[i, idx:idx + 3] = np.polyfit(np.linspace(0, 1, len(levels)), levels, 2)
-        elif len(levels) > 1:
-            vals[i, idx] = 0
-            vals[i, idx + 1:idx + 3] = np.polyfit(np.linspace(0, 1, len(levels)), levels, 1)
-        elif len(levels) == 1:
-            vals[i, idx:idx + 2] = 0
-            vals[i, idx + 2] = levels[0]
-        else:
-            vals[i, idx:idx + 2] = 0
-            vals[i, idx + 2] = - np.inf
-        idx = idx + 3
-
-        # timing deviation curve descriptors (TODO)
-
-        # storing levels for error calculation
-        allLevels[i] = [levels, int(piece.name.split('.')[0]), i]
-
-        # update start index
-        startInd = motifs[i]
-
-    if dataset.valsArray is not None:
-        print('vals array not none')
-        print(dataset.valsArray)
-        dataset.valsArray = np.append(dataset.valsArray, vals, axis=0)
-    else:
-        dataset.valsArray = vals
-
-    if dataset.moreVals is None:
-        dataset.moreVals = allLevels
-    else:
-        dataset.moreVals += allLevels
-
-    return dataset
