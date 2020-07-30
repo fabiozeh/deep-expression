@@ -734,9 +734,9 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True):
     #  valid metric strength values
     df['metricStrength'] = df['metricStrength'].astype(pd.CategoricalDtype(list(range(0, 4))))
 
-    #  one-hot encode nominal values
-    for attrib in ['metricStrength', 'pitch', 'bassNote']:
-        df = pd.concat([df, pd.get_dummies(df[attrib], prefix=attrib)], axis=1)
-        df.drop([attrib], axis=1, inplace=True)
+    # #  one-hot encode nominal values
+    # for attrib in ['metricStrength', 'pitch', 'bassNote']:
+    #     df = pd.concat([df, pd.get_dummies(df[attrib], prefix=attrib)], axis=1)
+    #     df.drop([attrib], axis=1, inplace=True)
 
     return df
