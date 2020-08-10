@@ -726,7 +726,7 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True):
     df = pd.DataFrame(data=df)
 
     #  span of valid midi notes for relevant instruments
-    df['pitch'] = df['pitch'].astype(pd.CategoricalDtype(list(range(36, 109))))
+    #  df['pitch'] = df['pitch'].astype(pd.CategoricalDtype(list(range(36, 109))))
 
     #  pitches in an octave
     df['bassNote'] = df['bassNote'].astype(pd.CategoricalDtype(list(range(0, 12))))
