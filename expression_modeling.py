@@ -668,7 +668,7 @@ def toMotifDataframe(piece, instrument, dataframe=None):
     return dataframe, dynamicsLevels
 
 
-def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True):
+def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, transpose=0):
     df = {
         'pitch': [],
         'probChord_I': [],
@@ -694,8 +694,8 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True):
         df['instrument'] = []
 
     for n in piece.parts[instrument]:
-        df['pitch'].append(n.pitch)
-        _, probs = estimateChord(np.asarray(n.allPitches).flatten(), piece.key, piece.mode)
+        df['pitch'].append(n.pitch + transpose)
+        _, probs = estimateChord(np.asarray(n.allPitches).flatten() + transpose, piece.key + transpose, piece.mode)
         df['probChord_I'].append(probs[0])
         df['probChord_II'].append(probs[1])
         df['probChord_III'].append(probs[2])
@@ -708,9 +708,9 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True):
         df['metricStrength'].append(metricStrength(n))
         bass = 1000
         for (_, _, v) in n.otherVoices:
-            bass = v if v < bass else bass
+            bass = v + transpose if v + transpose < bass else bass
         df['bassNote'].append(bass % 12)
-        df['isDissonance'].append(isDissonance(n.pitch, piece.key, piece.mode))
+        df['isDissonance'].append(isDissonance(n.pitch + transpose, piece.key + transpose, piece.mode))
         df['startTime'].append(n.startTime)
         df['durationSecs'].append(n.durS)
         df['timingDev'].append(n.timingDev)
