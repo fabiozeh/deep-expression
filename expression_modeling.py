@@ -209,7 +209,7 @@ def buildNoteParts(notearray, levels, srate, instruments=None):
                     # polyphony in melody instrument.
                     # Melody = highest pitch
                     if entry['note'] > X[-1].pitch:
-                        running_voices.append((current_beat + X[-1].durBeats, 41, X[-1].pitch))
+                        running_voices.append((current_beat + X[-1].durBeats, i, X[-1].pitch))
                         X[-1].pitch = entry['note']
                         X[-1].startTime = entry['start_time'] / srate
                         X[-1].durS = (entry['end_time'] - entry['start_time']) / srate
@@ -468,13 +468,13 @@ def metricStrength(n):
     eps = 1e-3
     sb = n.startBeat % 4
     if (sb < eps):
-        return '3'
-    elif (sb - 2 < eps):
-        return '2'
+        return 3
+    elif (abs(sb - 2) < eps):
+        return 2
     elif (sb - math.floor(sb) < eps):
-        return '1'
+        return 1
     else:
-        return '0'
+        return 0
 
 
 def toMotifDataframe(piece, instrument, dataframe=None):
