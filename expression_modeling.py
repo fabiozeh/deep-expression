@@ -196,9 +196,7 @@ def buildNoteParts(notearray, levels, srate, instruments=None):
                 current_grid_time_local = entry['start_time'] / srate
             current_beat = beat
             running_voices = [x for x in running_voices if x[0] > current_beat]
-            dur = noteValueParser(entry['note_value'])
-            if np.isnan(dur):
-                dur = entry['end_beat']
+            dur = entry['end_beat']
             local_tempo_notes.append((entry['start_beat'], entry['start_time'] / srate))
 
             if entry['instrument'] != i:  # not the desired instrument
@@ -239,17 +237,17 @@ def buildNoteParts(notearray, levels, srate, instruments=None):
     return parts
 
 
-def noteValueParser(s):
+def noteValueParser(s, quarter_value):
     tokens = s.split()
     t = tokens[0].lower()
     if 'tied' == t:
         tokens.pop(0)
         v1, tokens = __valueNameParser(tokens)
         v2, tokens = __valueNameParser(tokens)
-        return v1 + v2
+        return (v1 + v2) * quarter_value
     else:
         v, tokens = __valueNameParser(tokens)
-        return v
+        return v * quarter_value
 
 
 def __valueNameParser(tokens):
@@ -464,9 +462,9 @@ def normalizedBeats(part):
     return [(p.startBeat - st) / end for p in part]
 
 
-def metricStrength(n):
+def metricStrength(n, beats_per_measure, anacrusis_beats):
     eps = 1e-3
-    sb = n.startBeat % 4
+    sb = (n.startBeat + anacrusis_beats) % beats_per_measure
     if (sb < eps):
         return 3
     elif (abs(sb - 2) < eps):
@@ -482,7 +480,6 @@ def toMotifDataframe(piece, instrument, dataframe=None):
         dataframe = {
             'startTime': [],
             'beatInMeasure': [],
-            'metricStrength': [],
             'numberOfNotes': [],
             'duration': [],
             'durationSecs': [],
@@ -555,7 +552,6 @@ def toMotifDataframe(piece, instrument, dataframe=None):
 
                 dataframe['startTime'].append(st)
                 dataframe['beatInMeasure'].append(sb % 4)
-                dataframe['metricStrength'].append(metricStrength(motif[0]))
                 dataframe['numberOfNotes'].append(motifs[i + incl] - startInd)
                 dataframe['duration'].append(dur)
                 if motifs[i + incl] < len(piece.parts[instrument]):
@@ -680,11 +676,12 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, tran
         'probChord_VII': [],
         "duration": [],
         "ioi": [],
-        "metricStrength": [],
         "bassNote": [],
+        "harmony": [],
         "isDissonance": [],
         "startTime": [],
         "durationSecs": [],
+        "ioiRatio": [],
         "timingDev": [],
         "timingDevLocal": [],
         "localTempo": [],
@@ -705,17 +702,18 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, tran
         df['probChord_VII'].append(probs[6])
         df['duration'].append(n.durBeats)
         df['ioi'].append(n.ioiBeats)
-        df['metricStrength'].append(metricStrength(n))
         bass = 1000
         for (_, _, v) in n.otherVoices:
             bass = v + transpose if v + transpose < bass else bass
         df['bassNote'].append(bass % 12)
+        df['harmony'].append(np.sum([1 << k for k in set([v[2] % 12 for v in n.otherVoices])]))
         df['isDissonance'].append(isDissonance(n.pitch + transpose, piece.key + transpose, piece.mode))
         df['startTime'].append(n.startTime)
         df['durationSecs'].append(n.durS)
+        df['ioiRatio'].append(n.ioiS / n.ioiBeats)
         df['timingDev'].append(n.timingDev)
         df['timingDevLocal'].append(n.timingDevLocal)
-        df['localTempo'].append(n.localTempo)
+        df['localTempo'].append(np.log(n.localTempo))
         peak = -1000
         for lvl in n.levels:
             peak = lvl if lvl > peak else peak
@@ -730,9 +728,6 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, tran
 
     #  pitches in an octave
     df['bassNote'] = df['bassNote'].astype(pd.CategoricalDtype(list(range(0, 12))))
-
-    #  valid metric strength values
-    df['metricStrength'] = df['metricStrength'].astype(pd.CategoricalDtype(list(range(0, 4))))
 
     # #  one-hot encode nominal values
     # for attrib in ['metricStrength', 'pitch', 'bassNote']:
