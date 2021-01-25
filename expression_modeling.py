@@ -1,6 +1,5 @@
 import re
 import math
-import sys
 
 import numpy as np
 import pandas as pd
@@ -15,13 +14,14 @@ class Note:
     C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B = range(0, 12)
 
     def __init__(self, pitch=0, startBeat=0., startTime=0., durBeats=1.,
-                 durS=1., prevNote=None, nextNote=None, otherVoices=None,
+                 durS=1., instrument=1, prevNote=None, nextNote=None, otherVoices=None,
                  levels=None, timingDev=np.nan, timingDevLocal=np.nan, localTempo=np.nan):
         self.pitch = pitch
         self.startBeat = startBeat
         self.startTime = startTime
         self.durBeats = durBeats
         self.durS = durS
+        self.instrument = instrument
         self.prevNote = prevNote
         self.nextNote = nextNote
         if otherVoices is None:
@@ -77,15 +77,19 @@ class Mode:
 
 
 class Piece:
-    def __init__(self, parts=None, key=Note.C, mode=Mode.major, name='untitled', dynMean=-30, dynStd=7,
+    def __init__(self, part=None, key=Note.C, mode=Mode.major, name='untitled', beats_per_measure=0,
+                 time_sig_type=4, first_down_beat=0, dynMean=-30, dynStd=7,
                  startTime=-1.0, startBeat=-1.0, endTime=-1.0, endBeat=-1.0):
-        if parts is None:
-            self.parts = {}
+        if part is None:
+            self.part = []
         else:
-            self.parts = parts
+            self.part = part
         self.key = key
         self.mode = mode
         self.name = name
+        self.beats_per_measure = beats_per_measure
+        self.time_sig_type = time_sig_type
+        self.first_down_beat = first_down_beat
         self.dynMean = dynMean
         self.dynStd = dynStd
         self.startTime = startTime
@@ -93,148 +97,83 @@ class Piece:
         self.endTime = endTime
         self.endBeat = endBeat
 
-    def __getGlobalTempo(self):
-        if self.startTime < 0 or self.startBeat < 0 or self.endTime < 0 or self.endBeat < 0:
-            self.startTime = np.inf
-            self.startBeat = np.inf
-            self.endTime = 0.0
-            self.endBeat = 0.0
-            if not self.parts:
-                return np.nan
-            for p in self.parts:
-                if p[0].startTime < self.startTime:
-                    self.startTime = p[0].startTime
-                    self.startBeat = p[0].startBeat
-                if p[-1].startTime > self.endTime:
-                    self.endTime = p[-1].startTime
-                    self.endBeat = p[-1].startBeat
-        return (self.endBeat - self.startBeat) / (self.endTime - self.startTime)
-
-    globalTempo = property(__getGlobalTempo)
-
-
-class Dataset:
-    def __init__(self, relation='new relation', description='', attributes=None, valsArray=None, moreVals=None):
-        self.relation = relation
-        self.description = description
-        if attributes is None:
-            self.attributes = []
-        else:
-            self.attributes = attributes
-        self.valsArray = valsArray
-        self.moreVals = moreVals
-
-    def __getData(self):
-        return self.valsArray.tolist()
-
-    data = property(__getData)
-
-    def toArffDict(self):
-        d = self.__dict__.copy()
-        d['data'] = self.data
-        del d['valsArray']
-        return d
-
-    def toCsv(self, outfile=None):
-        fmt = ''
-        for _, tp in self.attributes:
-            if tp == 'REAL':
-                fmt += ',%.4f'
-            elif tp == 'INTEGER':
-                fmt += ',%d'
-            else:
-                fmt += ',%s'
-        if outfile is None:
-            outfile = open(self.relation + '.csv', 'w+')
-        np.savetxt(outfile, self.valsArray, fmt=fmt[1:])
-
 
 #
 # Parsing functions
 #
 
-
-def buildNoteParts(notearray, levels, srate, instruments=None):
-    parts = {}
-    # instruments in this piece
-    if instruments is None:
-        instruments = set(notearray['instrument'])
+def buildPart(notearray, levels, srate):
+    part = []
     # global tempo calculation
     global_start_time = notearray['start_time'][0] / srate
     global_start_beat = notearray['start_beat'][0]
     global_end_time = notearray['end_time'][-1] / srate
     global_end_beat = notearray['start_beat'][-1] + notearray['end_beat'][-1]
     global_tempo = (global_end_beat - global_start_beat) / (global_end_time - global_start_time)
-    for i in instruments:
-        X = []  # melody notes array
-        running_melody = False
-        current_beat = global_start_beat
-        running_voices = []
-        current_grid_time_global = global_start_time
-        current_grid_time_local = global_start_time
-        local_tempo_notes = []
-        local_tempo = global_tempo
-        for entry in notearray:
-            beat = entry['start_beat']
-            if beat > current_beat:
-                if running_melody:
-                    X[-1].otherVoices = running_voices
-                    running_melody = False
-            else:
-                if local_tempo_notes:
-                    local_tempo_notes.pop(-1)  # exclude simultaneous note
 
-            current_grid_time_global += (beat - current_beat) / global_tempo
+    # time trackers
+    current_beat = global_start_beat
+    current_grid_time_global = global_start_time  # expected time in s at global tempo
+    current_grid_time_local = global_start_time  # time in s synced to last onset and incremented at local tempo
+    local_tempo_notes = []  # most recent onsets (0 = beat and 1 = s) for computing local tempo
+    local_tempo = global_tempo  # tempo as moving average according to onsets in the 4 beats leading up to prev note
+
+    running_voices = []  # the set of notes ringing at the current beat
+    prev_note = {}  # previous note per inst. tracker
+    polyphony = []  # simultaneous notes buffer for properly setting running_voices
+
+    for entry in notearray:
+        beat = entry['start_beat']
+        if beat > current_beat:
+            # set running voices for all notes in polyphony buffer
+            for n in polyphony:
+                n.otherVoices = [x for x in running_voices if x[2] != n.pitch and x[1] != n.instrument]
+            polyphony = []
+        else:
             if local_tempo_notes:
-                local_tempo_notes = [x for x in local_tempo_notes if x[0] >= local_tempo_notes[-1][0] - 4]  # keep 4 beats before previous note
+                local_tempo_notes.pop(-1)  # exclude simultaneous note
 
-            if local_tempo_notes and (local_tempo_notes[-1][0] - local_tempo_notes[0][0]) > 1 and (local_tempo_notes[-1][1] - local_tempo_notes[0][1]) > 0:
-                local_tempo = (local_tempo_notes[-1][0] - local_tempo_notes[0][0]) / (local_tempo_notes[-1][1] - local_tempo_notes[0][1])
-                current_grid_time_local += (beat - local_tempo_notes[-1][0]) / local_tempo
-            else:
-                # keep the same local_tempo from previous entry.
-                current_grid_time_local = entry['start_time'] / srate
-            current_beat = beat
-            running_voices = [x for x in running_voices if x[0] > current_beat]
-            dur = entry['end_beat']
-            local_tempo_notes.append((entry['start_beat'], entry['start_time'] / srate))
+        current_grid_time_global += (beat - current_beat) / global_tempo
+        if local_tempo_notes:
+            local_tempo_notes = [x for x in local_tempo_notes if x[0] >= local_tempo_notes[-1][0] - 4]  # keep 4 beats before previous note
 
-            if entry['instrument'] != i:  # not the desired instrument
-                running_voices.append((current_beat + dur, entry['instrument'], entry['note']))
-            else:
-                # desired instrument
-                if running_melody:
-                    # polyphony in melody instrument.
-                    # Melody = highest pitch
-                    if entry['note'] > X[-1].pitch:
-                        running_voices.append((current_beat + X[-1].durBeats, i, X[-1].pitch))
-                        X[-1].pitch = entry['note']
-                        X[-1].startTime = entry['start_time'] / srate
-                        X[-1].durS = (entry['end_time'] - entry['start_time']) / srate
-                        X[-1].durBeats = dur
-                        X[-1].levels = levels[int(entry['start_time'] * 10 // srate):int(entry['end_time'] * 10 // srate + 1)]
-                        X[-1].timingDev = current_grid_time_global - X[-1].startTime
-                        X[-1].timingDevLocal = current_grid_time_local - X[-1].startTime
-                        X[-1].localTempo = local_tempo
-                    else:
-                        running_voices.append((current_beat + dur, entry['instrument'], entry['note']))
-                else:
-                    running_melody = True
-                    X.append(Note(pitch=entry['note'],
-                                  startBeat=current_beat,
-                                  startTime=entry['start_time'] / srate,
-                                  durS=(entry['end_time'] - entry['start_time']) / srate,
-                                  durBeats=dur,
-                                  levels=levels[int(entry['start_time'] * 10 // srate):int(entry['end_time'] * 10 // srate + 1)],
-                                  timingDev=current_grid_time_global - entry['start_time'] / srate,
-                                  timingDevLocal=current_grid_time_local - entry['start_time'] / srate,
-                                  localTempo=local_tempo))
-                    if len(X) > 1:
-                        X[-1].prevNote = X[-2]
-                        X[-2].nextNote = X[-1]
+        if local_tempo_notes and (local_tempo_notes[-1][0] - local_tempo_notes[0][0]) > 1 and (local_tempo_notes[-1][1] - local_tempo_notes[0][1]) > 0:
+            local_tempo = (local_tempo_notes[-1][0] - local_tempo_notes[0][0]) / (local_tempo_notes[-1][1] - local_tempo_notes[0][1])
+            current_grid_time_local += (beat - local_tempo_notes[-1][0]) / local_tempo
+        else:
+            # keep the same local_tempo from previous entry.
             current_grid_time_local = entry['start_time'] / srate
-        parts[i] = X
-    return parts
+
+        current_beat = beat
+        dur = entry['end_beat']
+        local_tempo_notes.append((entry['start_beat'], entry['start_time'] / srate))
+        running_voices = [x for x in running_voices if x[0] > current_beat]
+
+        this_note = Note(pitch=entry['note'],
+                         instrument=entry['instrument'],
+                         startBeat=current_beat,
+                         startTime=entry['start_time'] / srate,
+                         durS=(entry['end_time'] - entry['start_time']) / srate,
+                         durBeats=dur,
+                         levels=levels[int(entry['start_time'] * 10 // srate):int(entry['end_time'] * 10 // srate + 1)],
+                         timingDev=current_grid_time_global - entry['start_time'] / srate,
+                         timingDevLocal=current_grid_time_local - entry['start_time'] / srate,
+                         localTempo=local_tempo)
+        part.append(this_note)
+        polyphony.append(this_note)
+        running_voices.append((current_beat + dur, this_note.instrument, this_note.pitch))
+
+        if (entry['instrument'] in prev_note):
+            prev_note[entry['instrument']].nextNote = this_note
+            this_note.prevNote = prev_note[entry['instrument']]
+        prev_note[entry['instrument']] = this_note
+
+        current_grid_time_local = entry['start_time'] / srate
+
+    for n in polyphony:
+        n.otherVoices = [x for x in running_voices if x[2] != n.pitch and x[1] != n.instrument]
+
+    return part
 
 
 def noteValueParser(s, quarter_value):
@@ -366,7 +305,7 @@ def dissonancePresent(pitches, key, mode):
     return not np.all(np.isin(pitches, lookup))
 
 #
-# Timing calculations
+# Timing calculations (unused)
 #
 
 
@@ -467,7 +406,7 @@ def metricStrength(n, beats_per_measure, anacrusis_beats):
     sb = (n.startBeat + anacrusis_beats) % beats_per_measure
     if (sb < eps):
         return 3
-    elif (abs(sb - 2) < eps):
+    elif (beats_per_measure == 4 and abs(sb - 2) < eps):
         return 2
     elif (sb - math.floor(sb) < eps):
         return 1
@@ -475,222 +414,41 @@ def metricStrength(n, beats_per_measure, anacrusis_beats):
         return 0
 
 
-def toMotifDataframe(piece, instrument, dataframe=None):
-    if dataframe is None:
-        dataframe = {
-            'startTime': [],
-            'beatInMeasure': [],
-            'numberOfNotes': [],
-            'duration': [],
-            'durationSecs': [],
-            'locationInPiece': [],
-            'pitchX2': [],
-            'pitchX1': [],
-            'pitchX0': [],
-            'pitchContourX2': [],
-            'pitchContourX1': [],
-            'pitchContourX0': [],
-            'rhythmDrops': [],
-            'rhythmRises': [],
-            'rhythmContourX2': [],
-            'rhythmContourX1': [],
-            'rhythmContourX0': [],
-            'boundaryValue': [],
-            'locationStrongestNote': [],
-            'pieceKey': [],
-            'pieceMode': [],
-            'probChord_I': [],
-            'probChord_II': [],
-            'probChord_III': [],
-            'probChord_IV': [],
-            'probChord_V': [],
-            'probChord_VI': [],
-            'probChord_VII': [],
-            'initialChord': [],
-            'finalChord': [],
-            'hasDissonance': [],
-            'dissonanceLocation': [],
-            'isSoloPiece': [],
-            'pieceId': [],
-            'motifId': [],
-            'pieceDynMean': [],
-            'pieceDynStd': [],
-            'dynamicsX2': [],
-            'dynamicsX1': [],
-            'dynamicsX0': []
-        }
-    boundaryVals = boundaries(piece.parts[instrument])
-    isSolo = not any([len(x.otherVoices) > 0 for x in piece.parts[instrument]])
-    motifs = groupMotifs(piece.parts[instrument], bounds=boundaryVals)
-    dynamicsLevels = []
-
-    sys.stdout.write('piece=' + piece.name)
-    sys.stdout.flush()
-
-#    vals = np.zeros(shape=(len(motifs), len(dataset.attributes)), dtype=object)
-#    allLevels = [[], '', -1] * len(motifs)
-
-    startInd = 0
-    totalBeats = piece.parts[instrument][-1].startBeat + piece.parts[instrument][-1].durBeats
-    for i in range(0, len(motifs)):
-        sb = piece.parts[instrument][startInd].startBeat
-        st = piece.parts[instrument][startInd].startTime
-        incl = 0  # extra included motifs (for dataset augmentation)
-        incl_flag = True
-        while incl_flag:
-            incl_flag = i + incl < len(motifs)
-            if incl_flag:
-                if motifs[i + incl] < len(piece.parts[instrument]):
-                    dur = (piece.parts[instrument][motifs[i + incl]].startBeat - sb)
-                else:
-                    last = piece.parts[instrument][motifs[i + incl] - 1]
-                    dur = last.startBeat + last.durBeats - sb
-                incl_flag = incl_flag and (incl == 0 or dur <= 8)
-            if incl_flag:
-                motif = piece.parts[instrument][startInd:motifs[i + incl]]
-                x = np.linspace(0, 1, len(motif))
-
-                dataframe['startTime'].append(st)
-                dataframe['beatInMeasure'].append(sb % 4)
-                dataframe['numberOfNotes'].append(motifs[i + incl] - startInd)
-                dataframe['duration'].append(dur)
-                if motifs[i + incl] < len(piece.parts[instrument]):
-                    dataframe['durationSecs'].append(piece.parts[instrument][motifs[i + incl]].startTime - st)
-                else:
-                    last = piece.parts[instrument][motifs[i + incl] - 1]
-                    dataframe['durationSecs'].append(last.startTime + last.durS - st)
-                dataframe['locationInPiece'].append(sb / totalBeats)
-
-                # pitch curve coefficients:
-                pitches = np.array([n.pitch for n in motif])
-                coeff = np.polyfit(x, pitches - min(pitches), 2 if len(x) > 2 else 1)
-                coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-                dataframe['pitchX2'].append(coeff[0])
-                dataframe['pitchX1'].append(coeff[1])
-                dataframe['pitchX0'].append(coeff[2])
-
-                pContour = pitchContour(motif)
-                coeff = np.polyfit(x, pContour, 2 if len(x) > 2 else 1)
-                coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-                dataframe['pitchContourX2'].append(coeff[0])
-                dataframe['pitchContourX1'].append(coeff[1])
-                dataframe['pitchContourX0'].append(coeff[2])
-
-                # phrase separation criteria
-                dataframe['boundaryValue'].append(boundaryVals[startInd])
-
-                # rhythmic descriptors
-                rhContour = np.array([n.ioiBeats / n.prevNote.ioiBeats if n.prevNote is not None else 1 for n in motif])
-                dataframe['rhythmDrops'].append(max(rhContour) > 1)
-                dataframe['rhythmRises'].append(min(rhContour) < 1)
-
-                # rhythmic contour coefficients
-                coeff = np.polyfit(x, rhContour, 2 if len(x) > 2 else 1)
-                coeff = coeff if len(x) > 2 else [0, coeff[0], coeff[1]]
-                dataframe['rhythmContourX2'].append(coeff[0])
-                dataframe['rhythmContourX1'].append(coeff[1])
-                dataframe['rhythmContourX0'].append(coeff[2])
-
-                ms = [''] * len(motif)
-                for j, nt in enumerate(motif):
-                    ms[j] = metricStrength(nt)
-                dataframe['locationStrongestNote'].append((motif[np.argmax(ms)].startBeat - sb) / (motif[-1].startBeat - sb))
-
-                dataframe['pieceKey'].append(keyInFifths(piece.key))
-                dataframe['pieceMode'].append('Major' if piece.mode == Mode.major else 'Minor')
-
-                # chord probabilities
-                _, probs = estimateChord(np.asarray([n.allPitches for n in motif]).flatten(), piece.key, piece.mode)
-                dataframe['probChord_I'].append(probs[0])
-                dataframe['probChord_II'].append(probs[1])
-                dataframe['probChord_III'].append(probs[2])
-                dataframe['probChord_IV'].append(probs[3])
-                dataframe['probChord_V'].append(probs[4])
-                dataframe['probChord_VI'].append(probs[5])
-                dataframe['probChord_VII'].append(probs[6])
-
-                # initial / final chord
-                ch, _ = estimateChord(motif[0].allPitches, piece.key, piece.mode)
-                dataframe['initialChord'].append(str(ch))
-                ch, _ = estimateChord(motif[-1].allPitches, piece.key, piece.mode)
-                dataframe['finalChord'].append(str(ch))
-
-                # hasDissonance / dissonanceLocation
-                dataframe['hasDissonance'].append(False)
-                dataframe['dissonanceLocation'].append(-1)
-                for j in range(0, len(motif)):
-                    if isDissonance(motif[j].pitch, piece.key, piece.mode):
-                        dataframe['hasDissonance'][-1] = True
-                        dataframe['dissonanceLocation'][-1] = x[j]
-                        break
-
-                dataframe['isSoloPiece'].append(isSolo)
-                dataframe['pieceId'].append(int(piece.name.split('.')[0]))
-                dataframe['motifId'].append(len(dynamicsLevels))
-                dataframe['pieceDynMean'].append(piece.dynMean)
-                dataframe['pieceDynStd'].append(piece.dynStd)
-
-                # dynamics curve coefficients
-                levels = []
-                coeff = [0] * 3
-                for n in motif:
-                    levels += list(n.levels)
-                if len(levels) > 2:
-                    coeff = np.polyfit(np.linspace(0, 1, len(levels)), levels, 2)
-                elif len(levels) > 1:
-                    coeff[0] = 0
-                    coeff[1:] = np.polyfit(np.linspace(0, 1, len(levels)), levels, 1)
-                elif len(levels) == 1:
-                    coeff[0:1] = [0, 0]
-                    coeff[2] = levels[0]
-                else:
-                    coeff[0:1] = [0, 0]
-                    coeff[2] = - np.inf
-                dataframe['dynamicsX2'].append(coeff[0])
-                dataframe['dynamicsX1'].append(coeff[1])
-                dataframe['dynamicsX0'].append(coeff[2])
-
-                # timing deviation curve descriptors (TODO)
-
-                # storing levels for error calculation
-                dynamicsLevels.append(levels)
-
-                incl += 1
-
-        # update start index
-        startInd = motifs[i]
-
-    print(', {m} motifs'.format(m=len(dataframe['startTime'])))
-    return dataframe, dynamicsLevels
-
-
-def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, transpose=0):
+def buildNoteLevelDataframe(piece, transpose=0):
     df = {
-        'pitch': [],
-        'probChord_I': [],
-        'probChord_II': [],
-        'probChord_III': [],
-        'probChord_IV': [],
-        'probChord_V': [],
-        'probChord_VI': [],
-        'probChord_VII': [],
-        "duration": [],
-        "ioi": [],
-        "bassNote": [],
-        "harmony": [],
-        "isDissonance": [],
-        "startTime": [],
-        "durationSecs": [],
-        "ioiRatio": [],
-        "timingDev": [],
-        "timingDevLocal": [],
-        "localTempo": [],
-        "peakLevel": [],
+        'beatDiff': [],         # beats since last onset
+        'instrument': [],       # MIDI number of instrument
+        'pitch': [],            # MIDI pitch of instrument
+        'probChord_I': [],      # see estimateChord function
+        'probChord_II': [],     # see estimateChord function
+        'probChord_III': [],    # see estimateChord function
+        'probChord_IV': [],     # see estimateChord function
+        'probChord_V': [],      # see estimateChord function
+        'probChord_VI': [],     # see estimateChord function
+        'probChord_VII': [],    # see estimateChord function
+        "duration": [],         # note duration in beats
+        "ioi": [],              # beats since last note of this instrument
+        "bassNote": [],         # lowest sounding pitch (in 8ve) at onset time
+        "harmony": [],          # binary array encoding all other sounding tones (in 8ve) at onset time
+        "isDissonance": [],     # True if pitch not in piece.mode scale
+        "startTime": [],        # onset time in s
+        "durationSecs": [],     # note duration in s
+        "ioiRatio": [],         # ioi in beats / ioi in s (local tempo estimate)
+        "timingDev": [],        # total onset deviation time assuming steady tempo
+        "timingDevLocal": [],   # onset deviation time from local tempo
+        "localTempo": [],       # moving average of tempo before onset
+        "peakLevel": [],        # peak performance dBu within note duration
     }
-    if include_instrument_col:
-        df['instrument'] = []
+    hasMeasures = piece.beats_per_measure != 0  # if there are measure divisions
+    if hasMeasures:
+        df['metricStrength'] = []   # see metricStrength function
 
-    for n in piece.parts[instrument]:
+    for i, n in enumerate(piece.part):
+        if i > 0:
+            df['beatDiff'].append(n.startBeat - piece.part[i - 1].startBeat)
+        else:
+            df['beatDiff'].append(n.startBeat)
+        df['instrument'].append(n.instrument)
         df['pitch'].append(n.pitch + transpose)
         _, probs = estimateChord(np.asarray(n.allPitches).flatten() + transpose, piece.key + transpose, piece.mode)
         df['probChord_I'].append(probs[0])
@@ -710,7 +468,7 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, tran
         df['isDissonance'].append(isDissonance(n.pitch + transpose, piece.key + transpose, piece.mode))
         df['startTime'].append(n.startTime)
         df['durationSecs'].append(n.durS)
-        df['ioiRatio'].append(n.ioiS / n.ioiBeats)
+        df['ioiRatio'].append(n.ioiS / (n.ioiBeats + 1e-6))
         df['timingDev'].append(n.timingDev)
         df['timingDevLocal'].append(n.timingDevLocal)
         df['localTempo'].append(np.log(n.localTempo))
@@ -718,8 +476,8 @@ def buildNoteLevelDataframe(piece, instrument, include_instrument_col=True, tran
         for lvl in n.levels:
             peak = lvl if lvl > peak else peak
         df['peakLevel'].append(peak)
-        if include_instrument_col:
-            df['instrument'].append(instrument)
+        if hasMeasures:
+            df['metricStrength'].append(metricStrength(n, piece.beats_per_measure, piece.first_down_beat))
 
     df = pd.DataFrame(data=df)
 
