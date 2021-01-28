@@ -15,7 +15,7 @@ class DataGenerator:
         else:
             self.output_cols = output_cols
         for si, s in enumerate(data):
-            x = s[0]
+            x = s[0][0]
             tx = x.shape[0]
             xind = 0
             while tx > 0:
@@ -30,8 +30,8 @@ class DataGenerator:
     def __getitem__(self, index):
         index *= self.batch_size
         this_batch_size = self.batch_size if index + self.batch_size < len(self.indexes) else len(self.indexes) - index
-        X = np.zeros((this_batch_size, self.sequence_length, self.data[0][0].shape[1]))
-        Y = np.zeros((this_batch_size, self.sequence_length, len(self.output_cols)))
+        X = np.zeros((self.sequence_length, this_batch_size, self.data[0][0][0].shape[1]))
+        Y = np.zeros((self.sequence_length, this_batch_size, len(self.output_cols)))
         lengths = np.zeros((this_batch_size, 1))
         for i in range(this_batch_size):
             X[:, i, :], Y[:, i, :], lengths[i] = self.__getsingleitem(index + i)
@@ -39,7 +39,7 @@ class DataGenerator:
 
     def __getsingleitem(self, index):
         (seq, stride) = self.indexes[index]
-        (X, Y, _, _) = self.data[seq]
+        (X, Y, _) = self.data[seq][0]
         Y = Y.loc[:, self.output_cols]
         if stride + self.sequence_length <= X.shape[0]:
             X = X.iloc[stride:stride + self.sequence_length, :].to_numpy(dtype='float64')
