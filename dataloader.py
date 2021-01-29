@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import torch
 
 
 class DataGenerator:
@@ -35,7 +36,7 @@ class DataGenerator:
         lengths = np.zeros((this_batch_size, 1))
         for i in range(this_batch_size):
             X[:, i, :], Y[:, i, :], lengths[i] = self.__getsingleitem(index + i)
-        return X, Y, lengths
+        return torch.FloatTensor(X), torch.FloatTensor(Y), torch.LongTensor(lengths).view(-1)
 
     def __getsingleitem(self, index):
         (seq, stride) = self.indexes[index]
