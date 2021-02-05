@@ -1,61 +1,60 @@
-import math
-import numpy as np
 import torch
 
 
-class DataGenerator:
-    def __init__(self, data, sequence_length=0, batch_size=64, shuffle=False, output_cols=None):
+class DataGenerator(torch.utils.data.Dataset):
+    def __init__(self, data, vocab_col, sequence_length, output_cols=None):
         self.data = data
         self.sequence_length = sequence_length
-        self.batch_size = batch_size
-        self.shuffle = shuffle  # default to False because pytorch-lightning shuffles internally
-        self.pad_value = 0.
+        self.vocab_col = vocab_col
         self.indexes = []
         if output_cols is None:
-            self.output_cols = data[0][1].columns
+            self.output_cols = data[0][0][1].columns
         else:
             self.output_cols = output_cols
         for si, s in enumerate(data):
             x = s[0][0]
             tx = x.shape[0]
             xind = 0
+            self.indexes.append((si, xind))
             while tx > 0:
-                self.indexes.append((si, xind))
                 xind += 1
                 tx -= 1
-        np.random.shuffle(self.indexes)  # always shuffle once
+                self.indexes.append((si, xind))
+        # np.random.shuffle(self.indexes)  # always shuffle once
 
     def __len__(self):
-        return math.ceil(len(self.indexes) / self.batch_size)
+        return len(self.indexes)
 
     def __getitem__(self, index):
-        index *= self.batch_size
-        this_batch_size = self.batch_size if index + self.batch_size < len(self.indexes) else len(self.indexes) - index
-        X = np.zeros((self.sequence_length, this_batch_size, self.data[0][0][0].shape[1]))
-        Y = np.zeros((self.sequence_length, this_batch_size, len(self.output_cols)))
-        lengths = np.zeros((this_batch_size, 1))
-        for i in range(this_batch_size):
-            X[:, i, :], Y[:, i, :], lengths[i] = self.__getsingleitem(index + i)
-        return torch.FloatTensor(X), torch.FloatTensor(Y), torch.LongTensor(lengths).view(-1)
-
-    def __getsingleitem(self, index):
         (seq, stride) = self.indexes[index]
         (X, Y, _) = self.data[seq][0]
         Y = Y.loc[:, self.output_cols]
         if stride + self.sequence_length <= X.shape[0]:
             X = X.iloc[stride:stride + self.sequence_length, :].to_numpy(dtype='float64')
             Y = Y.iloc[stride:stride + self.sequence_length, :].to_numpy(dtype='float64')
-            return X, Y, self.sequence_length
+            length = self.sequence_length
         else:
-            # pad
-            X = X.iloc[stride:X.shape[0], :].to_numpy(dtype='float64')
-            padX = np.full((self.sequence_length - X.shape[0], X.shape[1]), self.pad_value)
-            Y = Y.iloc[stride:Y.shape[0], :].to_numpy(dtype='float64')
-            padY = np.full((self.sequence_length - Y.shape[0], Y.shape[1]), self.pad_value)
-            return np.concatenate((X, padX), axis=0), np.concatenate((Y, padY), axis=0), X.shape[0]
+            length = X.shape[0] - stride
+            X = X.iloc[stride:, :].to_numpy(dtype='float64')
+            Y = Y.iloc[stride:, :].to_numpy(dtype='float64')
 
-    def on_epoch_end(self):
-        """Updates indexes after each epoch
-        """
-        if self.shuffle:
-            np.random.shuffle(self.indexes)
+        pitch = torch.LongTensor(X[:, self.vocab_col])
+        harmRhythm = torch.cat([torch.FloatTensor(X[:, :self.vocab_col]),
+                                torch.FloatTensor(X[:, self.vocab_col + 1:])], dim=1)
+        return pitch, harmRhythm, torch.FloatTensor(Y), length
+
+    @staticmethod
+    def collate_fn(batch):
+        pitch, harmRhythm, Y, length = (
+            [element[0] for element in batch],
+            [element[1] for element in batch],
+            [element[2] for element in batch],
+            [element[3] for element in batch],
+        )
+
+        # Pad batch
+        pitch = torch.nn.utils.rnn.pad_sequence(pitch, batch_first=False)
+        harmRhythm = torch.nn.utils.rnn.pad_sequence(harmRhythm, batch_first=False)
+        Y = torch.nn.utils.rnn.pad_sequence(Y, batch_first=False)
+
+        return pitch, harmRhythm, Y, torch.LongTensor(length).view(-1)
