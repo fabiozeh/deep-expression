@@ -3,6 +3,8 @@ import math
 
 import numpy as np
 import pandas as pd
+import pretty_midi
+
 
 #
 # Classes
@@ -137,12 +139,11 @@ def buildPart(notearray, levels, srate):
         if local_tempo_notes:
             local_tempo_notes = [x for x in local_tempo_notes if x[0] >= local_tempo_notes[-1][0] - 4]  # keep 4 beats before previous note
 
+        # if there's more than 1 beat logged, update local_tempo
         if local_tempo_notes and (local_tempo_notes[-1][0] - local_tempo_notes[0][0]) > 1 and (local_tempo_notes[-1][1] - local_tempo_notes[0][1]) > 0:
             local_tempo = (local_tempo_notes[-1][0] - local_tempo_notes[0][0]) / (local_tempo_notes[-1][1] - local_tempo_notes[0][1])
-            current_grid_time_local += (beat - local_tempo_notes[-1][0]) / local_tempo
-        else:
-            # keep the same local_tempo from previous entry.
-            current_grid_time_local = entry['start_time'] / srate
+
+        current_grid_time_local += (beat - current_beat) / local_tempo
 
         current_beat = beat
         dur = entry['end_beat']
@@ -304,21 +305,6 @@ def dissonancePresent(pitches, key, mode):
     pitches = [(p - scale + 12) % 12 for p in pitches]
     return not np.all(np.isin(pitches, lookup))
 
-#
-# Timing calculations (unused)
-#
-
-
-def localTempo(notes):
-    if not notes:
-        return np.nan
-    notes.sort(key=(lambda x: x.startTime))
-    totalBeats = notes[-1].startBeat - notes[0].startBeat
-    totalS = notes[-1].startTime - notes[0].startTime
-    if totalBeats <= 1 or totalS <= 0:
-        return np.nan
-    else:
-        return totalBeats / totalS
 
 #
 # Phrase recognition
@@ -433,7 +419,7 @@ def buildNoteLevelDataframe(piece, transpose=0):
         "isDissonance": [],     # True if pitch not in piece.mode scale
         "startTime": [],        # onset time in s
         "durationSecs": [],     # note duration in s
-        "ioiRatio": [],         # ioi in beats / ioi in s (local tempo estimate)
+        "ioiRatio": [],         # ioi in s / ioi in beats (local tempo estimate)
         "timingDev": [],        # total onset deviation time assuming steady tempo
         "timingDevLocal": [],   # onset deviation time from local tempo
         "localTempo": [],       # moving average of tempo before onset
@@ -493,3 +479,70 @@ def buildNoteLevelDataframe(piece, transpose=0):
     #     df.drop([attrib], axis=1, inplace=True)
 
     return df
+
+
+def midi_performance(test, prediction, moments, ix_to_lex, method='ioiRatio'):
+    """
+    Returns a pretty_midi object with a performance generated according to the
+    given numpy array of performance actions. Method specifies which measurement
+    of tempo and timing deviations was used.
+    """
+    tempo = math.exp(test[1].localTempo.iloc[0] * test[2][0, 1] + test[2][0, 0])
+    pm = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    piano = pretty_midi.Instrument(1, is_drum=False, name='piano')
+    violin = pretty_midi.Instrument(41, is_drum=False, name='violin')
+    pm.instruments.append(piano)
+    pm.instruments.append(violin)
+
+    if method == 'ioiRatio':
+        # for now, ratio calculated wrt next note of same instrument, which is
+        # inconvenient and may produce unsynced performances. Also, durations
+        # are copied from reference performance (since the model wasn't trained
+        # on articulation).
+        ioiRatio = prediction * test[2][2, 1] + test[2][2, 0]
+
+        piano_ioi = (0, 1)
+        violin_ioi = (0, 1)
+        for x, y, dev in zip(test[0].itertuples(), test[1].itertuples(), ioiRatio):
+            pitch = ix_to_lex.get(x.pitch)
+            if pitch:
+                pitch = pitch[0]
+                if x.instrument_1:
+                    if piano.notes:
+                        start = piano.notes[-1].start + piano_ioi[0] * piano_ioi[1]
+                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
+                    else:
+                        start = y.startTime * moments['startTime'][1] + moments['startTime'][0]
+                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
+                    piano.notes.append(pretty_midi.Note(100, pitch, start, end))
+                    piano_ioi = (x.ioi * moments['ioi'][1] + moments['ioi'][0] + 1e-6, dev)
+                else:
+                    if violin.notes:
+                        start = violin.notes[-1].start + violin_ioi[0] * violin_ioi[1]
+                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
+                    else:
+                        start = y.startTime * moments['startTime'][1] + moments['startTime'][0]
+                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
+                    violin.notes.append(pretty_midi.Note(100, pitch, start, end))
+                    violin_ioi = (x.ioi * moments['ioi'][1] + moments['ioi'][0] + 1e-6, dev)
+
+    elif method == 'timingDevLocal':
+        timingDevLocal = prediction[:, 0] * moments['timingDevLocal'][1] + moments['timingDevLocal'][0]
+        localTempo = prediction[:, 1] * test[2][0, 1] + test[2][0, 0]
+
+        for x, y, dev, loc_tmp in zip(test[0].itertuples(), test[1].itertuples(), timingDevLocal, localTempo):
+            pitch = ix_to_lex.get(x.pitch)
+            if pitch:
+                pitch = pitch[0]
+                start += ((x.beatDiff * moments['beatDiff'][1] + moments['beatDiff'][0]) / (1e-6 + math.exp(loc_tmp))
+                          - (dev * moments['timingDevLocal'][1] + moments['timingDevLocal'][0]))
+                end = start + (x.duration * moments['duration'][1] + moments['duration'][0]) / (1e-6 + math.exp(loc_tmp))
+                note = pretty_midi.Note(100, pitch, start, end)
+                if x.instrument_1:
+                    piano.notes.append(note)
+                else:
+                    violin.notes.append(note)
+    else:
+        raise ValueError("Unknown method")
+
+    return pm
