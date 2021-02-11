@@ -100,10 +100,10 @@ class ValidationDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         (X, Y, _) = self.data[index][0]
         Y = Y.loc[:, self.output_cols]
-        if X.shape[0] % self.stride == 0:
-            batch_size = int(X.shape[0] / self.stride)
+        if (X.shape[0] - self.sequence_length) % self.stride == 0:
+            batch_size = int((X.shape[0] - self.sequence_length) / self.stride + 1)
         else:
-            batch_size = int(X.shape[0] / self.stride + 1)
+            batch_size = int((X.shape[0] - self.sequence_length) / self.stride + 2)
 
         pitch_batch = np.zeros((self.sequence_length, batch_size))
         score_feats_batch = np.zeros((self.sequence_length, batch_size, X.shape[1] - 1))

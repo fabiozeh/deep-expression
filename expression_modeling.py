@@ -498,30 +498,19 @@ def midi_performance(test, prediction, moments, ix_to_lex, method='ioiRatio'):
         # on articulation).
         ioiRatio = prediction * test[2][2, 1] + test[2][2, 0]
 
-        piano_ioi = (0, 1)
-        violin_ioi = (0, 1)
+        ioi = 0
+        start = 0.
         for x, y, dev in zip(test[0].itertuples(), test[1].itertuples(), ioiRatio):
             pitch = ix_to_lex.get(x.pitch)
             if pitch:
                 pitch = pitch[0]
+                start += (x.beatDiff * moments['beatDiff'][1] + moments['beatDiff'][0] + 1e-6) * ioi
+                end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
                 if x.instrument_1:
-                    if piano.notes:
-                        start = piano.notes[-1].start + piano_ioi[0] * piano_ioi[1]
-                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
-                    else:
-                        start = y.startTime * moments['startTime'][1] + moments['startTime'][0]
-                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
                     piano.notes.append(pretty_midi.Note(100, pitch, start, end))
-                    piano_ioi = (x.ioi * moments['ioi'][1] + moments['ioi'][0] + 1e-6, dev)
                 else:
-                    if violin.notes:
-                        start = violin.notes[-1].start + violin_ioi[0] * violin_ioi[1]
-                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
-                    else:
-                        start = y.startTime * moments['startTime'][1] + moments['startTime'][0]
-                        end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
                     violin.notes.append(pretty_midi.Note(100, pitch, start, end))
-                    violin_ioi = (x.ioi * moments['ioi'][1] + moments['ioi'][0] + 1e-6, dev)
+                ioi = dev
 
     elif method == 'timingDevLocal':
         timingDevLocal = prediction[:, 0] * moments['timingDevLocal'][1] + moments['timingDevLocal'][0]
