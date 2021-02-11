@@ -121,7 +121,6 @@ def buildPart(notearray, levels, srate):
     local_tempo = global_tempo  # tempo as moving average according to onsets in the 4 beats leading up to prev note
 
     running_voices = []  # the set of notes ringing at the current beat
-    prev_note = {}  # previous note per inst. tracker
     polyphony = []  # simultaneous notes buffer for properly setting running_voices
 
     for entry in notearray:
@@ -160,14 +159,12 @@ def buildPart(notearray, levels, srate):
                          timingDev=current_grid_time_global - entry['start_time'] / srate,
                          timingDevLocal=current_grid_time_local - entry['start_time'] / srate,
                          localTempo=local_tempo)
+        if part:
+            this_note.prevNote = part[-1]
+            part[-1].nextNote = this_note
         part.append(this_note)
         polyphony.append(this_note)
         running_voices.append((current_beat + dur, this_note.instrument, this_note.pitch))
-
-        if (entry['instrument'] in prev_note):
-            prev_note[entry['instrument']].nextNote = this_note
-            this_note.prevNote = prev_note[entry['instrument']]
-        prev_note[entry['instrument']] = this_note
 
         current_grid_time_local = entry['start_time'] / srate
 

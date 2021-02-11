@@ -32,7 +32,7 @@ class TrainDataset(torch.utils.data.Dataset):
                 xind += 1
                 tx -= 1
                 self.indexes.append((si, xind))
-        # np.random.shuffle(self.indexes)  # always shuffle once
+        np.random.shuffle(self.indexes)  # always shuffle once
 
     def __len__(self):
         if self.dummy:
