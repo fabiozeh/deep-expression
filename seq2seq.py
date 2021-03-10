@@ -166,7 +166,7 @@ class Net(pl.LightningModule):
         return [optimizer], [scheduler]
 
 
-def evaluation(sequences, sequence_length, model, output_cols, stride=0, context=0, pad_both_ends=False, device=None):
+def evaluation(sequences, sequence_length, model, output_cols, stride=0, context=0, pad_both_ends=False):
     loader = dl.ValidationDataset(sequences,
                                   vocab_col=sequences[0][0][0].columns.get_loc("pitch"),
                                   sequence_length=sequence_length,
@@ -174,7 +174,7 @@ def evaluation(sequences, sequence_length, model, output_cols, stride=0, context
                                   stride=stride,
                                   context=context,
                                   pad_both_ends=pad_both_ends,
-                                  device=device)
+                                  device=model.device)
     Y_hat = []
     for piece in range(len(loader)):
         (pch, s_f, Y, lth) = loader[piece]
@@ -310,7 +310,7 @@ if __name__ == "__main__":
 
         _, mse = evaluation(val, args.seq_len, model, output_cols=args.gen_attr,
                             stride=args.stride, context=args.context,
-                            pad_both_ends=(not args.no_ctx_train), device=model.device)
+                            pad_both_ends=(not args.no_ctx_train))
 
         for i, col in enumerate(args.gen_attr):
             print('Validation set MSE for ' + col + ': ' + str(np.mean(mse[:, i])))
