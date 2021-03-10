@@ -1,5 +1,6 @@
 import numpy as np
 import pickle
+import sys
 import argparse
 import torch
 import torch.nn as nn
@@ -74,29 +75,27 @@ class Decoder(nn.Module):
 
 class Net(pl.LightningModule):
 
-    def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4, context=0, window=0):
+    def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4,
+                 context=0, window=0, scheduler_step=4, lr_decay_by=0.25):
         super(Net, self).__init__()
 
         assert hidden_size % 2 == 0, "hidden_size must be multiple of 2"
 
-        self.n_y = n_y
-        self.hidden_size = hidden_size
-        self.lr = lr
-        self.window = window
-        self.context = context
+        self.save_hyperparameters()
+
         self.rng = np.random.default_rng()
 
         self.encoder = Encoder(n_x, vocab_size, int(hidden_size / 2), dropout_rate)
-        self.decoder = Decoder(self.n_y, hidden_size, 2 * hidden_size, dropout_rate)
+        self.decoder = Decoder(n_y, hidden_size, 2 * hidden_size, dropout_rate)
 
     def forward(self, pitch, score_feats, lengths):
         """
         Generate the entire sequence
         """
         src_vec, encoded_score = self.encoder(pitch, score_feats, lengths)
-        hidden = torch.zeros((1, pitch.shape[1], self.hidden_size), device=self.device)
-        y = torch.zeros((pitch.shape[0], pitch.shape[1], self.n_y), device=self.device)
-        prev_y = torch.zeros((1, pitch.shape[1], self.n_y), device=self.device)
+        hidden = torch.zeros((1, pitch.shape[1], self.hparams.hidden_size), device=self.device)
+        y = torch.zeros((pitch.shape[0], pitch.shape[1], self.hparams.n_y), device=self.device)
+        prev_y = torch.zeros((1, pitch.shape[1], self.hparams.n_y), device=self.device)
         for i in range(pitch.shape[0]):
             prev_y, hidden = self.decoder(src_vec[i, :, :].unsqueeze(0), prev_y, encoded_score, hidden)
             y[i, :, :] = prev_y
@@ -119,24 +118,27 @@ class Net(pl.LightningModule):
         # iterate generating y
         teacher_forcing_ratio = 0.5
 
-        hidden = torch.zeros((1, score_feats.shape[1], self.hidden_size), device=self.device)
-        y_hat = torch.zeros((y.shape[0], y.shape[1], self.n_y), device=self.device)
-        prev_y = torch.zeros((1, score_feats.shape[1], self.n_y), device=self.device)
+        hidden = torch.zeros((1, score_feats.shape[1], self.hparams.hidden_size), device=self.device)
+        y_hat = torch.zeros((y.shape[0], y.shape[1], self.hparams.n_y), device=self.device)
+        prev_y = torch.zeros((1, score_feats.shape[1], self.hparams.n_y), device=self.device)
         for i in range(pitch.shape[0]):
             prev_y, hidden = self.decoder(src_vec[i, :, :].unsqueeze(0), prev_y, encoded_score, hidden)
             y_hat[i, :, :] = prev_y
             if self.rng.random() > teacher_forcing_ratio:
-                prev_y = y[i, :, :].view(1, -1, self.n_y)
+                prev_y = y[i, :, :].view(1, -1, self.hparams.n_y)
 
-        if self.window:
-            ctx = self.context
+        if self.hparams.window:
+            ctx = self.hparams.context
             if not ctx:
-                ctx = y_hat.shape[0] - self.window
-            y_hat = y_hat[ctx:ctx + self.window, :, :]
-            y = y[ctx:ctx + self.window, :, :]
+                ctx = y_hat.shape[0] - self.hparams.window
+            y_hat = y_hat[ctx:ctx + self.hparams.window, :, :]
+            y = y[ctx:ctx + self.hparams.window, :, :]
 
         loss = F.mse_loss(y_hat, y)
-        return {'loss': loss}
+        if (batch_idx + 1) % 500 == 0:
+            self.log('train_loss', loss)
+
+        return loss
 
     def validation_step(self, batch, batch_idx):
         pitch, score_feats, y, lengths = batch
@@ -147,19 +149,51 @@ class Net(pl.LightningModule):
 
         y_hat = self.forward(pitch, score_feats, lengths)
 
-        if self.window:
-            ctx = self.context
+        if self.hparams.window:
+            ctx = self.hparams.context
             if not ctx:
-                ctx = y_hat.shape[0] - self.window
-            y_hat = y_hat[ctx:ctx + self.window, :, :]
-            y = y[ctx:ctx + self.window, :, :]
+                ctx = y_hat.shape[0] - self.hparams.window
+            y_hat = y_hat[ctx:ctx + self.hparams.window, :, :]
+            y = y[ctx:ctx + self.hparams.window, :, :]
 
-        return {'val_loss': F.mse_loss(y_hat, y)}
+        val_loss = F.mse_loss(y_hat, y)
+        self.log('val_loss', val_loss, prog_bar=True)
+        return val_loss
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=self.lr)
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.scheduler_step, gamma=args.lr_decay_by)
+        optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.hparams.scheduler_step, gamma=self.hparams.lr_decay_by)
         return [optimizer], [scheduler]
+
+
+def evaluation(sequences, sequence_length, model, output_cols, stride=0, context=0, pad_both_ends=False, device=None):
+    loader = dl.ValidationDataset(sequences,
+                                  vocab_col=sequences[0][0][0].columns.get_loc("pitch"),
+                                  sequence_length=sequence_length,
+                                  output_cols=output_cols,
+                                  stride=stride,
+                                  context=context,
+                                  pad_both_ends=pad_both_ends,
+                                  device=device)
+    Y_hat = []
+    for piece in range(len(loader)):
+        (pch, s_f, Y, lth) = loader[piece]
+        out = model(pch, s_f, lth)
+        out = out.detach().numpy()
+        y_hat_p = np.zeros((sequences[piece][0][1].shape[0], len(output_cols)))
+        ind = 0
+        for s in range(out.shape[1] - 1):
+            y_hat_p[ind:ind + stride, :] = out[context:context + stride, s, :]
+            ind += stride
+        y_hat_p[ind:, :] = out[context:context + y_hat_p.shape[0] - ind, -1, :]
+        Y_hat.append(y_hat_p)
+
+        mse = np.zeros((len(sequences), Y_hat[0].shape[1]))
+        for i, S in enumerate(sequences):
+            Y = S[0][1]
+            Y = Y.loc[:, output_cols]
+            mse[i, :] = np.mean((Y_hat[i][:Y.shape[0], :] - Y) ** 2) / np.mean(Y ** 2)
+    return Y_hat, mse
 
 
 if __name__ == "__main__":
@@ -196,13 +230,13 @@ if __name__ == "__main__":
         train = pickle.load(data_file)
     if args.eval:
         val = train
-    elif args.val_data:
+    if args.val_data:
         with open(args.val_data, 'rb') as val_data_file:
             val = pickle.load(val_data_file)
 
     # Instantiating model
 
-    pl.seed_everything(1728)
+    # pl.seed_everything(1728) # TODO This alone doesn't seem to work
 
     model = Net(train[0][0][0].shape[1],
                 len(args.gen_attr),
@@ -211,17 +245,25 @@ if __name__ == "__main__":
                 dropout_rate=args.dropout,
                 lr=args.lr,
                 context=(0 if args.no_ctx_train else args.context),
-                window=(0 if args.no_ctx_train else args.stride))
+                window=(0 if args.no_ctx_train else args.stride),
+                scheduler_step=args.scheduler_step,
+                lr_decay_by=args.lr_decay_by)
 
     # Training model
 
     if not args.eval:
+
+        print("Beginning sequence to sequence model training invoked with command:")
+        print(' '.join(sys.argv))
+
         if args.cpu_only:
             trainer = pl.Trainer(fast_dev_run=args.dev_run,
-                                 progress_bar_refresh_rate=20, max_epochs=args.epochs)
+                                 progress_bar_refresh_rate=20, max_epochs=args.epochs,
+                                 val_check_interval=0.25)
         else:
             trainer = pl.Trainer(gpus=-1, accelerator='ddp', fast_dev_run=args.dev_run,
-                                 progress_bar_refresh_rate=20, max_epochs=args.epochs)
+                                 progress_bar_refresh_rate=20, max_epochs=args.epochs,
+                                 val_check_interval=0.25)
 
         if args.seq_len == 0:
             train_ds = dl.FullPieceDataset(train,
@@ -262,4 +304,13 @@ if __name__ == "__main__":
         torch.save(model.state_dict(), args.model_state)
 
     else:
-        print("Pending implementation.")
+        # Load model
+        model.load_state_dict(torch.load(args.model_state))
+        model.eval()
+
+        _, mse = evaluation(val, args.seq_len, model, output_cols=args.gen_attr,
+                            stride=args.stride, context=args.context,
+                            pad_both_ends=(not args.no_ctx_train), device=model.device)
+
+        for i, col in enumerate(args.gen_attr):
+            print('Validation set MSE for ' + col + ': ' + str(np.mean(mse[:, i])))

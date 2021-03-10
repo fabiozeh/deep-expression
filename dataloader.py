@@ -146,7 +146,7 @@ class ValidationDataset(torch.utils.data.Dataset):
         Y_batch[self.context:, 0, :] = Y.iloc[:self.sequence_length - self.context, :].to_numpy(dtype='float64')
         length_batch[0] = self.sequence_length
 
-        xind = self.context
+        xind = self.stride - self.context
         for i in range(1, batch_size):
             if xind + self.sequence_length <= X.shape[0]:
                 pitch_batch[:, i] = X.iloc[xind:xind + self.sequence_length, self.vocab_col].to_numpy(dtype='int64')
