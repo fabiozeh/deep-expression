@@ -3,7 +3,7 @@
 #SBATCH --partition=high
 #SBATCH -c 4
 #SBATCH -n 1
-#SBATCH --mem=32G
+#SBATCH --mem=20G
 #SBATCH --gres=gpu:1
 #SBATCH --signal=SIGUSR1@90  # signals to lightning if task is about to hit wall time
 
@@ -18,12 +18,12 @@ export PYTHONFAULTHANDLER=1
 export PATH="$HOME/deep-exp/anaconda3/bin:$PATH"
 source activate envdeep-exp
 
-st=2021-03-10-hp40-128-ioidur-12ep.pth
+st=2021-03-12-hp40-128-ioidurlvl-ie1-12ep.pth
 
-srun python seq2seq.py data/LvB_train_sequences.data \
---val-data data/LvB_val_sequences.data \
+srun python seq2seq.py data/LvB_I_train_sequences_fold_0.data \
+--val-data data/LvB_I_val_sequences_fold_0.data \
 --model-state $st \
---gen-attr ioiRatio durationSecs \
+--gen-attr ioiRatio durationSecs peakLevel \
 --lr 1e-4 \
 --hidden-size 128 \
 --dropout 0.1 \
@@ -40,10 +40,10 @@ srun python seq2seq.py data/LvB_train_sequences.data \
 date
 echo Training Finished for model $st
 
-srun python seq2seq.py data/LvB_val_sequences.data \
+srun python seq2seq.py data/LvB_I_val_sequences_fold_0.data \
 --eval \
 --model-state $st \
---gen-attr ioiRatio durationSecs \
+--gen-attr ioiRatio durationSecs peakLevel \
 --hidden-size 128 \
 --dropout 0.1 \
 --batch-size 128 \
