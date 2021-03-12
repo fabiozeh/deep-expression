@@ -3,3 +3,4 @@ examples/
 .ipynb_checkpoints/
 data/musicnet
 *.data
+*.arff
