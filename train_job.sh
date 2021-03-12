@@ -15,14 +15,12 @@ date
 export XDG_RUNTIME_DIR=""
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
-# export PATH="$HOME/deep-exp/anaconda3/bin:$PATH"
-# source activate envdeep-exp
+export PATH="$HOME/deep-exp/anaconda3/bin:$PATH"
+source activate envdeep-exp
 
 st=2021-03-10-hp40-128-ioidur-12ep.pth
 
-srun python ExpressionGen-seq2seq.py data/LvB_train_sequences.data \
---dev-run \
---cpu-only \
+srun python seq2seq.py data/LvB_train_sequences.data \
 --val-data data/LvB_val_sequences.data \
 --model-state $st \
 --gen-attr ioiRatio durationSecs \
@@ -42,7 +40,7 @@ srun python ExpressionGen-seq2seq.py data/LvB_train_sequences.data \
 date
 echo Training Finished for model $st
 
-srun python ExpressionGen-seq2seq.py data/LvB_val_sequences.data \
+srun python seq2seq.py data/LvB_val_sequences.data \
 --eval \
 --model-state $st \
 --gen-attr ioiRatio durationSecs \
