@@ -397,6 +397,25 @@ def metricStrength(n, beats_per_measure, anacrusis_beats):
         return 0
 
 
+def buildNoteDataframeFromPerfMidi(midi):
+    df = {
+        'pitch': [],
+        'onsetDiff': [],
+        'durationSecs': [],
+        'velocity': []
+    }
+    time = 0
+    midi.instruments[0].notes.sort(key=lambda x: x.start)
+    for n in midi.instruments[0].notes:
+        df['pitch'].append(n.pitch)
+        df['onsetDiff'].append(n.start - time)
+        time = n.start
+        df['durationSecs'].append(n.end - time)
+        df['velocity'].append(n.velocity)
+    df = pd.DataFrame(data=df)
+    return df
+
+
 def buildNoteLevelDataframe(piece, transpose=0):
     df = {
         'beatDiff': [],         # beats since last onset

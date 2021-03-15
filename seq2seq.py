@@ -205,9 +205,10 @@ if __name__ == "__main__":
                         help='PyTorch state dictionary file name for saving (on train mode) or loading (on eval mode).')
     parser.add_argument('--eval', action='store_true', help='runs the script for evaluation.')
     parser.add_argument('-g', '--gen-attr', nargs='+',
-                        choices=('ioiRatio', 'peakLevel', 'localTempo', 'timingDev', 'timingDevLocal', 'durationSecs'),
+                        choices=('ioiRatio', 'peakLevel', 'localTempo', 'timingDev', 'timingDevLocal', 'durationSecs', 'velocity'),
                         default=['ioiRatio', 'peakLevel', 'durationSecs'],
                         help='expressive attributes to learn/generate.')
+    parser.add_argument('--vocab-size', type=int, default=85, help='pitch vocabulary size.')
     parser.add_argument('-r', '--lr', type=float, default=1e-5, help='learning rate for training.')
     parser.add_argument('-l', '--seq-len', type=int, default=32, help='number of notes read by model at once.')
     parser.add_argument('-s', '--hidden-size', type=int, default=64, help='size of hidden model layers.')
@@ -240,7 +241,7 @@ if __name__ == "__main__":
 
     model = Net(train[0][0][0].shape[1],
                 len(args.gen_attr),
-                vocab_size=81 + 4,  # vocab size=81 + ix: 0 = pad, len+1 = UKN, len+2 = END, len+3 = SOS
+                vocab_size=args.vocab_size,  # vocab size=81 + ix: 0 = pad, len+1 = UKN, len+2 = END, len+3 = SOS
                 hidden_size=args.hidden_size,
                 dropout_rate=args.dropout,
                 lr=args.lr,
