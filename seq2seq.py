@@ -188,11 +188,11 @@ def evaluation(sequences, sequence_length, model, output_cols, stride=0, context
         y_hat_p[ind:, :] = out[context:context + y_hat_p.shape[0] - ind, -1, :]
         Y_hat.append(y_hat_p)
 
-        mse = np.zeros((len(sequences), Y_hat[0].shape[1]))
-        for i, S in enumerate(sequences):
-            Y = S[0][1]
-            Y = Y.loc[:, output_cols]
-            mse[i, :] = np.mean((Y_hat[i][:Y.shape[0], :] - Y) ** 2) / np.mean(Y ** 2)
+    mse = np.zeros((len(sequences), Y_hat[0].shape[1]))
+    for i, S in enumerate(sequences):
+        Y = S[0][1]
+        Y = Y.loc[:, output_cols]
+        mse[i, :] = np.mean((Y_hat[i][:Y.shape[0], :] - Y) ** 2) / np.mean(Y ** 2)
     return Y_hat, mse
 
 

@@ -492,25 +492,30 @@ def midi_performance(test, prediction, moments, ix_to_lex, method='ioiRatio'):
     pm.instruments.append(violin)
 
     if method == 'ioiRatio':
-        # for now, ratio calculated wrt next note of same instrument, which is
-        # inconvenient and may produce unsynced performances. Also, durations
-        # are copied from reference performance (since the model wasn't trained
-        # on articulation).
-        ioiRatio = prediction * test[2][2, 1] + test[2][2, 0]
+
+        if len(prediction.shape) < 2:
+            prediction = np.expand_dims(prediction, axis=1)
+
+        ioiRatio = prediction[:, 0] * test[2][2, 1] + test[2][2, 0]
+
+        if (prediction.shape[1] > 1):
+            durSecs = prediction[:, 1] * moments['durationSecs'][1] + moments['durationSecs'][0]
+        else:
+            durSecs = test[1].durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0]
 
         ioi = 0
         start = 0.
-        for x, y, dev in zip(test[0].itertuples(), test[1].itertuples(), ioiRatio):
+        for x, devT, devD in zip(test[0].itertuples(), ioiRatio, durSecs):
             pitch = ix_to_lex.get(x.pitch)
             if pitch:
                 pitch = pitch[0]
                 start += (x.beatDiff * moments['beatDiff'][1] + moments['beatDiff'][0] + 1e-6) * ioi
-                end = start + (y.durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0])
+                end = start + devD
                 if x.instrument_1:
                     piano.notes.append(pretty_midi.Note(100, pitch, start, end))
                 else:
                     violin.notes.append(pretty_midi.Note(100, pitch, start, end))
-                ioi = dev
+                ioi = devT
 
     elif method == 'timingDevLocal':
         timingDevLocal = prediction[:, 0] * moments['timingDevLocal'][1] + moments['timingDevLocal'][0]
