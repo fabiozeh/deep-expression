@@ -1,6 +1,7 @@
 import numpy as np
 import pickle
 import sys
+import os
 import argparse
 import torch
 import torch.nn as nn
@@ -290,6 +291,10 @@ if __name__ == "__main__":
                                               context=args.context,
                                               pad_both_ends=(not args.no_ctx_train),
                                               device=model.device)
+
+        if os.path.exists(args.model_state):
+            model.load_state_dict(torch.load(args.model_state))
+
         if val:
             trainer.fit(model,
                         DataLoader(train_ds,
@@ -300,6 +305,13 @@ if __name__ == "__main__":
                         DataLoader(val_ds,
                                    batch_size=None,
                                    num_workers=args.workers))
+        else:
+            trainer.fit(model,
+                        DataLoader(train_ds,
+                                   batch_size=args.batch_size,
+                                   num_workers=args.workers,
+                                   shuffle=True,
+                                   collate_fn=dl.TrainDataset.collate_fn))
 
         # Saving model
         torch.save(model.state_dict(), args.model_state)
