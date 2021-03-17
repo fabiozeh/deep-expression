@@ -264,11 +264,11 @@ if __name__ == "__main__":
         if args.cpu_only:
             trainer = pl.Trainer(fast_dev_run=args.dev_run,
                                  progress_bar_refresh_rate=20, max_epochs=args.epochs,
-                                 val_check_interval=0.25)
+                                 val_check_interval=0.01)
         else:
             trainer = pl.Trainer(gpus=-1, accelerator='ddp', fast_dev_run=args.dev_run,
                                  progress_bar_refresh_rate=20, max_epochs=args.epochs,
-                                 val_check_interval=0.25)
+                                 val_check_interval=0.01)
 
         if args.seq_len == 0:
             train_ds = dl.FullPieceDataset(train,
