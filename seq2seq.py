@@ -163,7 +163,10 @@ class Net(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = optim.Adam(self.parameters(), lr=self.hparams.lr)
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=self.hparams.scheduler_step, gamma=self.hparams.lr_decay_by)
+        scheduler = {'scheduler': optim.lr_scheduler.StepLR(optimizer,
+                                                            step_size=self.hparams.scheduler_step,
+                                                            gamma=self.hparams.lr_decay_by),
+                     'interval': 'step'}
         return [optimizer], [scheduler]
 
 
@@ -216,8 +219,8 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
     parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
     parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
-    parser.add_argument('--scheduler-step', type=int, default=4, help='epochs between lr decays.')
-    parser.add_argument('--lr-decay-by', type=float, default=0.25, help='lr decay rate on scheduler steps.')
+    parser.add_argument('--scheduler-step', type=int, default=1e4, help='steps between lr decays.')
+    parser.add_argument('--lr-decay-by', type=float, default=0.9, help='lr decay rate on scheduler steps.')
     parser.add_argument('--stride', type=int, default=24, help='the stride in the notes sliding window.')
     parser.add_argument('--context', type=int, default=4, help='no. of notes ignored at window start.')
     parser.add_argument('--no-ctx-train', action='store_true', help='ignore context when training.')
