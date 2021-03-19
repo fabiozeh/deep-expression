@@ -3,7 +3,7 @@
 #SBATCH --partition=high
 #SBATCH -c 4
 #SBATCH -n 1
-#SBATCH --mem=32G
+#SBATCH --mem=48G
 #SBATCH --gres=gpu:1
 #SBATCH --signal=SIGUSR1@90  # signals to lightning if task is about to hit wall time
 
@@ -13,12 +13,12 @@ hostname
 date
 
 export XDG_RUNTIME_DIR=""
-export NCCL_DEBUG=INFO
+#export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 export PATH="$HOME/deep-exp/anaconda3/bin:$PATH"
 source activate envdeep-exp
 
-st=2021-03-16-hp100-128-ie4.pth
+st=2021-03-19-hp200-256-ie4.pth
 val=data/mF_val_sequences.data
 
 srun python seq2seq.py data/mF_train_sequences.data \
@@ -26,16 +26,16 @@ srun python seq2seq.py data/mF_train_sequences.data \
 --model-state $st \
 --gen-attr velocity \
 --vocab-size 92 \
---lr 1e-5 \
---hidden-size 128 \
+--lr 3e-4 \
+--hidden-size 256 \
 --dropout 0.1 \
 --batch-size 64 \
---seq-len 100 \
+--seq-len 200 \
 --stride 60 \
---context 20 \
+--context 120 \
 --epochs 1 \
---scheduler-step 3 \
---lr-decay-by 0.1 \
+--scheduler-step 8000 \
+--lr-decay-by 0.9 \
 --workers 4
 
 # wait
@@ -47,9 +47,9 @@ srun python seq2seq.py $val \
 --model-state $st \
 --gen-attr velocity \
 --vocab-size 92 \
---hidden-size 128 \
+--hidden-size 256 \
 --dropout 0.1 \
 --batch-size 64 \
---seq-len 100 \
+--seq-len 200 \
 --stride 60 \
---context 20
+--context 120

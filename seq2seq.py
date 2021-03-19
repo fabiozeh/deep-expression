@@ -77,7 +77,7 @@ class Decoder(nn.Module):
 class Net(pl.LightningModule):
 
     def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4,
-                 context=0, window=0, scheduler_step=4, lr_decay_by=0.25):
+                 context=0, window=0, scheduler_step=10000, lr_decay_by=0.9):
         super(Net, self).__init__()
 
         assert hidden_size % 2 == 0, "hidden_size must be multiple of 2"
@@ -219,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
     parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
     parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
-    parser.add_argument('--scheduler-step', type=int, default=1e4, help='steps between lr decays.')
+    parser.add_argument('--scheduler-step', type=int, default=10000, help='steps between lr decays.')
     parser.add_argument('--lr-decay-by', type=float, default=0.9, help='lr decay rate on scheduler steps.')
     parser.add_argument('--stride', type=int, default=24, help='the stride in the notes sliding window.')
     parser.add_argument('--context', type=int, default=4, help='no. of notes ignored at window start.')
