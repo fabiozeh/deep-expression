@@ -48,7 +48,6 @@ class TrainDataset(torch.utils.data.Dataset):
                 xind += 1
                 tx -= 1
                 self.indexes.append((si, xind))
-        np.random.seed(777)
         np.random.shuffle(self.indexes)  # always shuffle once
 
     def __len__(self):
@@ -61,8 +60,6 @@ class TrainDataset(torch.utils.data.Dataset):
         (seq, offset) = self.indexes[index]
         (X, Y, _) = self.data[seq][0]
         Y = Y.loc[:, self.output_cols]
-        print(str(seq) + '  ' + str(offset))
-        print(X.shape[0])
         if offset < 0:
             if offset + self.sequence_length <= X.shape[0]:
                 Xp = np.zeros((self.sequence_length, X.shape[1]), dtype='float64')
