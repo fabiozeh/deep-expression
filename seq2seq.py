@@ -185,7 +185,11 @@ def evaluation(sequences, sequence_length, model, output_cols, stride=0, context
         out = model(pch, s_f, lth)
         out = out.detach().numpy()
         y_hat_p = np.zeros((sequences[piece][0][1].shape[0], len(output_cols)))
-        ind = 0
+        if pad_both_ends:
+            ind = 0
+        else:
+            y_hat_p[:context, :] = out[:context, 0, :]
+            ind = context
         for s in range(out.shape[1] - 1):
             y_hat_p[ind:ind + stride, :] = out[context:context + stride, s, :]
             ind += stride

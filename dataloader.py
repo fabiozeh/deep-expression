@@ -133,57 +133,80 @@ class ValidationDataset(torch.utils.data.Dataset):
         (X, Y, _) = self.data[index][0]
         Y = Y.loc[:, self.output_cols]
         if self.pad_both_ends:
-            if (X.shape[0] + self.context) % self.stride == 0:
+            if X.shape[0] % self.stride == 0:
                 batch_size = int(X.shape[0] / self.stride)
             else:
                 batch_size = int(X.shape[0] / self.stride + 1)
-        else:
-            if (X.shape[0] - self.sequence_length + self.context) % self.stride == 0:
-                batch_size = int((X.shape[0] - self.sequence_length + self.context) / self.stride + 1)
-            else:
-                batch_size = int((X.shape[0] - self.sequence_length + self.context) / self.stride + 2)
 
-        pitch_batch = np.zeros((self.sequence_length, batch_size))
-        score_feats_batch = np.zeros((self.sequence_length, batch_size, X.shape[1] - 1))
-        Y_batch = np.zeros((self.sequence_length, batch_size, len(self.output_cols)))
-        length_batch = np.zeros(batch_size)
+            pitch_batch = np.zeros((self.sequence_length, batch_size))
+            score_feats_batch = np.zeros((self.sequence_length, batch_size, X.shape[1] - 1))
+            Y_batch = np.zeros((self.sequence_length, batch_size, len(self.output_cols)))
+            length_batch = np.zeros(batch_size)
 
-        pitch_batch[self.context:, 0] = X.iloc[:self.sequence_length - self.context, self.vocab_col].to_numpy(dtype='int64')
-        score_feats_batch[self.context:, 0, :self.vocab_col] = X.iloc[:self.sequence_length - self.context, :self.vocab_col].to_numpy(dtype='float64')
-        score_feats_batch[self.context:, 0, self.vocab_col:] = X.iloc[:self.sequence_length - self.context, self.vocab_col + 1:].to_numpy(dtype='float64')
-        Y_batch[self.context:, 0, :] = Y.iloc[:self.sequence_length - self.context, :].to_numpy(dtype='float64')
-        length_batch[0] = self.sequence_length
+            pitch_batch[self.context:, 0] = X.iloc[:self.sequence_length - self.context, self.vocab_col].to_numpy(dtype='int64')
+            score_feats_batch[self.context:, 0, :self.vocab_col] = X.iloc[:self.sequence_length - self.context, :self.vocab_col].to_numpy(dtype='float64')
+            score_feats_batch[self.context:, 0, self.vocab_col:] = X.iloc[:self.sequence_length - self.context, self.vocab_col + 1:].to_numpy(dtype='float64')
+            Y_batch[self.context:, 0, :] = Y.iloc[:self.sequence_length - self.context, :].to_numpy(dtype='float64')
+            length_batch[0] = self.sequence_length
 
-        xind = self.stride - self.context
-        for i in range(1, batch_size):
-            if xind < 0:
-                if xind + self.sequence_length <= X.shape[0]:
-                    pitch_batch[-xind:, i] = X.iloc[:xind + self.sequence_length, self.vocab_col].to_numpy(dtype='int64')
-                    score_feats_batch[-xind:, i, :self.vocab_col] = X.iloc[:xind + self.sequence_length, :self.vocab_col].to_numpy(dtype='float64')
-                    score_feats_batch[-xind:, i, self.vocab_col:] = X.iloc[:xind + self.sequence_length, self.vocab_col + 1:].to_numpy(dtype='float64')
-                    Y_batch[-xind:, i, :] = Y.iloc[:xind + self.sequence_length, :].to_numpy(dtype='float64')
+            xind = self.stride - self.context
+            for i in range(1, batch_size):
+                if xind < 0:
+                    if xind + self.sequence_length <= X.shape[0]:
+                        pitch_batch[-xind:, i] = X.iloc[:xind + self.sequence_length, self.vocab_col].to_numpy(dtype='int64')
+                        score_feats_batch[-xind:, i, :self.vocab_col] = X.iloc[:xind + self.sequence_length, :self.vocab_col].to_numpy(dtype='float64')
+                        score_feats_batch[-xind:, i, self.vocab_col:] = X.iloc[:xind + self.sequence_length, self.vocab_col + 1:].to_numpy(dtype='float64')
+                        Y_batch[-xind:, i, :] = Y.iloc[:xind + self.sequence_length, :].to_numpy(dtype='float64')
+                        length_batch[i] = self.sequence_length
+                    else:
+                        sz_last = X.shape[0] - xind
+                        pitch_batch[-xind:sz_last, i] = X.iloc[:, self.vocab_col].to_numpy(dtype='int64')
+                        score_feats_batch[-xind:sz_last, i, :self.vocab_col] = X.iloc[:, :self.vocab_col].to_numpy(dtype='float64')
+                        score_feats_batch[-xind:sz_last, i, self.vocab_col:] = X.iloc[:, self.vocab_col + 1:].to_numpy(dtype='float64')
+                        Y_batch[-xind:sz_last, i, :] = Y.to_numpy(dtype='float64')
+                        length_batch[i] = sz_last
+                elif xind + self.sequence_length <= X.shape[0]:
+                    pitch_batch[:, i] = X.iloc[xind:xind + self.sequence_length, self.vocab_col].to_numpy(dtype='int64')
+                    score_feats_batch[:, i, :self.vocab_col] = X.iloc[xind:xind + self.sequence_length, :self.vocab_col].to_numpy(dtype='float64')
+                    score_feats_batch[:, i, self.vocab_col:] = X.iloc[xind:xind + self.sequence_length, self.vocab_col + 1:].to_numpy(dtype='float64')
+                    Y_batch[:, i, :] = Y.iloc[xind:xind + self.sequence_length, :].to_numpy(dtype='float64')
                     length_batch[i] = self.sequence_length
                 else:
                     sz_last = X.shape[0] - xind
-                    pitch_batch[-xind:sz_last, i] = X.iloc[:, self.vocab_col].to_numpy(dtype='int64')
-                    score_feats_batch[-xind:sz_last, i, :self.vocab_col] = X.iloc[:, :self.vocab_col].to_numpy(dtype='float64')
-                    score_feats_batch[-xind:sz_last, i, self.vocab_col:] = X.iloc[:, self.vocab_col + 1:].to_numpy(dtype='float64')
-                    Y_batch[-xind:sz_last, i, :] = Y.to_numpy(dtype='float64')
+                    pitch_batch[:sz_last, i] = X.iloc[xind:, self.vocab_col].to_numpy(dtype='int64')
+                    score_feats_batch[:sz_last, i, :self.vocab_col] = X.iloc[xind:, :self.vocab_col].to_numpy(dtype='float64')
+                    score_feats_batch[:sz_last, i, self.vocab_col:] = X.iloc[xind:, self.vocab_col + 1:].to_numpy(dtype='float64')
+                    Y_batch[:sz_last, i, :] = Y.iloc[xind:, :].to_numpy(dtype='float64')
                     length_batch[i] = sz_last
-            elif xind + self.sequence_length <= X.shape[0]:
-                pitch_batch[:, i] = X.iloc[xind:xind + self.sequence_length, self.vocab_col].to_numpy(dtype='int64')
-                score_feats_batch[:, i, :self.vocab_col] = X.iloc[xind:xind + self.sequence_length, :self.vocab_col].to_numpy(dtype='float64')
-                score_feats_batch[:, i, self.vocab_col:] = X.iloc[xind:xind + self.sequence_length, self.vocab_col + 1:].to_numpy(dtype='float64')
-                Y_batch[:, i, :] = Y.iloc[xind:xind + self.sequence_length, :].to_numpy(dtype='float64')
-                length_batch[i] = self.sequence_length
+                xind += self.stride
+
+        else:
+            if (X.shape[0] - self.sequence_length + self.stride) % self.stride == 0:
+                batch_size = int((X.shape[0] - self.sequence_length + self.stride) / self.stride)
             else:
-                sz_last = X.shape[0] - xind
-                pitch_batch[:sz_last, i] = X.iloc[xind:, self.vocab_col].to_numpy(dtype='int64')
-                score_feats_batch[:sz_last, i, :self.vocab_col] = X.iloc[xind:, :self.vocab_col].to_numpy(dtype='float64')
-                score_feats_batch[:sz_last, i, self.vocab_col:] = X.iloc[xind:, self.vocab_col + 1:].to_numpy(dtype='float64')
-                Y_batch[:sz_last, i, :] = Y.iloc[xind:, :].to_numpy(dtype='float64')
-                length_batch[i] = sz_last
-            xind += self.stride
+                batch_size = int((X.shape[0] - self.sequence_length + self.stride) / self.stride + 1)
+
+            pitch_batch = np.zeros((self.sequence_length, batch_size))
+            score_feats_batch = np.zeros((self.sequence_length, batch_size, X.shape[1] - 1))
+            Y_batch = np.zeros((self.sequence_length, batch_size, len(self.output_cols)))
+            length_batch = np.zeros(batch_size)
+
+            xind = 0
+            for i in range(0, batch_size):
+                if xind + self.sequence_length <= X.shape[0]:
+                    pitch_batch[:, i] = X.iloc[xind:xind + self.sequence_length, self.vocab_col].to_numpy(dtype='int64')
+                    score_feats_batch[:, i, :self.vocab_col] = X.iloc[xind:xind + self.sequence_length, :self.vocab_col].to_numpy(dtype='float64')
+                    score_feats_batch[:, i, self.vocab_col:] = X.iloc[xind:xind + self.sequence_length, self.vocab_col + 1:].to_numpy(dtype='float64')
+                    Y_batch[:, i, :] = Y.iloc[xind:xind + self.sequence_length, :].to_numpy(dtype='float64')
+                    length_batch[i] = self.sequence_length
+                else:
+                    sz_last = X.shape[0] - xind
+                    pitch_batch[:sz_last, i] = X.iloc[xind:, self.vocab_col].to_numpy(dtype='int64')
+                    score_feats_batch[:sz_last, i, :self.vocab_col] = X.iloc[xind:, :self.vocab_col].to_numpy(dtype='float64')
+                    score_feats_batch[:sz_last, i, self.vocab_col:] = X.iloc[xind:, self.vocab_col + 1:].to_numpy(dtype='float64')
+                    Y_batch[:sz_last, i, :] = Y.iloc[xind:, :].to_numpy(dtype='float64')
+                    length_batch[i] = sz_last
+                xind += self.stride
 
         if self.device is not None:
             pitch_batch = torch.LongTensor(pitch_batch, device=self.device)
