@@ -48,14 +48,15 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, n_y, hidden_size, enc_hidden_size, dropout=0.1):
+    def __init__(self, n_y, hidden_size, enc_hidden_size, dropout=0.1, gru_layers=1):
         super(Decoder, self).__init__()
 
         self.hidden_size = hidden_size
+        self.gru_layers = gru_layers
         self.y_proj = nn.Linear(n_y, hidden_size)
         self.drop1 = nn.Dropout(dropout)
         self.attention = nn.MultiheadAttention(hidden_size, 1, kdim=enc_hidden_size, vdim=enc_hidden_size)
-        self.rnn = nn.GRU(2 * hidden_size, hidden_size, num_layers=2)
+        self.rnn = nn.GRU(2 * hidden_size, hidden_size, num_layers=gru_layers)
         self.drop2 = nn.Dropout(dropout)
         self.norm = nn.LayerNorm(hidden_size)
         self.ff1 = nn.Linear(4 * hidden_size, 2 * hidden_size)
@@ -69,7 +70,7 @@ class Decoder(nn.Module):
         y_projected = self.drop1(self.y_proj(y_prev))  # (1, batch_size, hidden_size)
 
         # shapes: (1, b, h) <- ( (1, b, h), (len_seq, b, enc_hidden), (len_seq, b, enc_hidden) )
-        context, _ = self.attention(dec_hidden, encoder_out, encoder_out)
+        context, _ = self.attention(dec_hidden[-1, :, :].unsqueeze(0), encoder_out, encoder_out)
         rnn_out, new_dec_hidden = self.rnn(torch.cat([y_projected, context], dim=2), dec_hidden)
 
         rnn_out = self.norm(self.drop2(rnn_out))
@@ -79,7 +80,7 @@ class Decoder(nn.Module):
 class Net(pl.LightningModule):
 
     def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4,
-                 context=0, window=0, scheduler_step=10000, lr_decay_by=0.9):
+                 context=0, window=0, scheduler_step=10000, lr_decay_by=0.9, dec_layers=1):
         super(Net, self).__init__()
 
         assert hidden_size % 2 == 0, "hidden_size must be multiple of 2"
@@ -89,14 +90,14 @@ class Net(pl.LightningModule):
         self.rng = np.random.default_rng()
 
         self.encoder = Encoder(n_x, vocab_size, int(hidden_size / 2), dropout_rate)
-        self.decoder = Decoder(n_y, hidden_size, 2 * hidden_size, dropout_rate)
+        self.decoder = Decoder(n_y, hidden_size, 2 * hidden_size, dropout_rate, gru_layers=dec_layers)
 
     def forward(self, pitch, score_feats, lengths):
         """
         Generate the entire sequence
         """
         src_vec, encoded_score = self.encoder(pitch, score_feats, lengths)
-        hidden = torch.zeros((1, pitch.shape[1], self.hparams.hidden_size), device=self.device)
+        hidden = torch.zeros((self.hparams.dec_layers, pitch.shape[1], self.hparams.hidden_size), device=self.device)
         y = torch.zeros((pitch.shape[0], pitch.shape[1], self.hparams.n_y), device=self.device)
         prev_y = torch.zeros((1, pitch.shape[1], self.hparams.n_y), device=self.device)
         for i in range(pitch.shape[0]):
@@ -121,7 +122,7 @@ class Net(pl.LightningModule):
         # iterate generating y
         teacher_forcing_ratio = 0.5
 
-        hidden = torch.zeros((1, score_feats.shape[1], self.hparams.hidden_size), device=self.device)
+        hidden = torch.zeros((self.hparams.dec_layers, score_feats.shape[1], self.hparams.hidden_size), device=self.device)
         y_hat = torch.zeros((y.shape[0], y.shape[1], self.hparams.n_y), device=self.device)
         prev_y = torch.zeros((1, score_feats.shape[1], self.hparams.n_y), device=self.device)
         for i in range(pitch.shape[0]):
@@ -222,6 +223,7 @@ if __name__ == "__main__":
     parser.add_argument('-r', '--lr', type=float, default=1e-5, help='learning rate for training.')
     parser.add_argument('-l', '--seq-len', type=int, default=32, help='number of notes read by model at once.')
     parser.add_argument('-s', '--hidden-size', type=int, default=64, help='size of hidden model layers.')
+    parser.add_argument('--dec-layers', type=int, default=1, help='number of recurrent layers in decoder.')
     parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
     parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
     parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
@@ -258,7 +260,8 @@ if __name__ == "__main__":
                 context=(0 if args.no_ctx_train else args.context),
                 window=(0 if args.no_ctx_train else args.stride),
                 scheduler_step=args.scheduler_step,
-                lr_decay_by=args.lr_decay_by)
+                lr_decay_by=args.lr_decay_by,
+                dec_layers=args.dec_layers)
 
     # Training model
 
