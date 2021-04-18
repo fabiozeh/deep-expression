@@ -283,6 +283,7 @@ def run_with_args(model, train, val, args):
         for i, col in enumerate(args.gen_attr):
             print('Validation set MSE for ' + col + ': ' + str(np.mean(mse[:, i])))
 
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description=descr)
