@@ -215,11 +215,12 @@ def run_with_args(model, train, val, args):
 
         if args.cpu_only:
             trainer = pl.Trainer(fast_dev_run=args.dev_run,
-                                 progress_bar_refresh_rate=20, max_epochs=args.epochs,
+                                 progress_bar_refresh_rate=100, max_epochs=args.epochs,
                                  val_check_interval=0.01)
         else:
             trainer = pl.Trainer(gpus=-1, accelerator='ddp', fast_dev_run=args.dev_run,
-                                 progress_bar_refresh_rate=20, max_epochs=args.epochs,
+                                 plugins=pl.plugins.DDPPlugin(find_unused_parameters=False),
+                                 progress_bar_refresh_rate=100, max_epochs=args.epochs,
                                  val_check_interval=0.01)
 
         if args.seq_len == 0:
