@@ -207,64 +207,7 @@ def evaluation(sequences, sequence_length, model, output_cols, stride=0, context
     return Y_hat, mse
 
 
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser(description=descr)
-    parser.add_argument('data', help='data file for training or evaluation.')
-    parser.add_argument('--val-data', help='validation set file')
-    parser.add_argument('-m', '--model-state', default='seq2seq_model_state.pth',
-                        help='PyTorch state dictionary file name for saving (on train mode) or loading (on eval mode).')
-    parser.add_argument('--eval', action='store_true', help='runs the script for evaluation.')
-    parser.add_argument('-g', '--gen-attr', nargs='+',
-                        choices=('ioiRatio', 'peakLevel', 'localTempo', 'timingDev', 'timingDevLocal', 'durationSecs', 'velocity'),
-                        default=['ioiRatio', 'peakLevel', 'durationSecs'],
-                        help='expressive attributes to learn/generate.')
-    parser.add_argument('--vocab-size', type=int, default=85, help='pitch vocabulary size.')
-    parser.add_argument('-r', '--lr', type=float, default=1e-5, help='learning rate for training.')
-    parser.add_argument('-l', '--seq-len', type=int, default=32, help='number of notes read by model at once.')
-    parser.add_argument('-s', '--hidden-size', type=int, default=64, help='size of hidden model layers.')
-    parser.add_argument('--dec-layers', type=int, default=1, help='number of recurrent layers in decoder.')
-    parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
-    parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
-    parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
-    parser.add_argument('--scheduler-step', type=int, default=10000, help='steps between lr decays.')
-    parser.add_argument('--lr-decay-by', type=float, default=0.9, help='lr decay rate on scheduler steps.')
-    parser.add_argument('--stride', type=int, default=24, help='the stride in the notes sliding window.')
-    parser.add_argument('--context', type=int, default=4, help='no. of notes ignored at window start.')
-    parser.add_argument('--no-ctx-train', action='store_true', help='ignore context when training.')
-    parser.add_argument('--dev-run', action='store_true', help='run script for testing purposes.')
-    parser.add_argument('-w', '--workers', type=int, default=8, help='workers for the lightning trainer.')
-    parser.add_argument('--cpu-only', action='store_true', help="don't train on GPUs.")
-
-    args = parser.parse_args()
-
-    #  Loading data
-    with open(args.data, 'rb') as data_file:
-        train = pickle.load(data_file)
-    if args.eval:
-        val = train
-    if args.val_data:
-        with open(args.val_data, 'rb') as val_data_file:
-            val = pickle.load(val_data_file)
-
-    # Instantiating model
-
-    # pl.seed_everything(1728) # TODO This alone doesn't seem to work
-
-    model = Net(train[0][0][0].shape[1],
-                len(args.gen_attr),
-                vocab_size=args.vocab_size,  # vocab size=81 + ix: 0 = pad, len+1 = UKN, len+2 = END, len+3 = SOS
-                hidden_size=args.hidden_size,
-                dropout_rate=args.dropout,
-                lr=args.lr,
-                context=(0 if args.no_ctx_train else args.context),
-                window=(0 if args.no_ctx_train else args.stride),
-                scheduler_step=args.scheduler_step,
-                lr_decay_by=args.lr_decay_by,
-                dec_layers=args.dec_layers)
-
-    # Training model
-
+def run_with_args(model, train, val, args):
     if not args.eval:
 
         print("Beginning sequence to sequence model training invoked with command:")
@@ -339,3 +282,63 @@ if __name__ == "__main__":
 
         for i, col in enumerate(args.gen_attr):
             print('Validation set MSE for ' + col + ': ' + str(np.mean(mse[:, i])))
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description=descr)
+    parser.add_argument('data', help='data file for training or evaluation.')
+    parser.add_argument('--val-data', help='validation set file')
+    parser.add_argument('-m', '--model-state', default='seq2seq_model_state.pth',
+                        help='PyTorch state dictionary file name for saving (on train mode) or loading (on eval mode).')
+    parser.add_argument('--eval', action='store_true', help='runs the script for evaluation.')
+    parser.add_argument('-g', '--gen-attr', nargs='+',
+                        choices=('ioiRatio', 'peakLevel', 'localTempo', 'timingDev', 'timingDevLocal', 'durationSecs', 'velocity'),
+                        default=['ioiRatio', 'peakLevel', 'durationSecs'],
+                        help='expressive attributes to learn/generate.')
+    parser.add_argument('--vocab-size', type=int, default=85, help='pitch vocabulary size.')
+    parser.add_argument('-r', '--lr', type=float, default=1e-5, help='learning rate for training.')
+    parser.add_argument('-l', '--seq-len', type=int, default=32, help='number of notes read by model at once.')
+    parser.add_argument('-s', '--hidden-size', type=int, default=64, help='size of hidden model layers.')
+    parser.add_argument('--dec-layers', type=int, default=1, help='number of recurrent layers in decoder.')
+    parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
+    parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
+    parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
+    parser.add_argument('--scheduler-step', type=int, default=10000, help='steps between lr decays.')
+    parser.add_argument('--lr-decay-by', type=float, default=0.9, help='lr decay rate on scheduler steps.')
+    parser.add_argument('--stride', type=int, default=24, help='the stride in the notes sliding window.')
+    parser.add_argument('--context', type=int, default=4, help='no. of notes ignored at window start.')
+    parser.add_argument('--no-ctx-train', action='store_true', help='ignore context when training.')
+    parser.add_argument('--dev-run', action='store_true', help='run script for testing purposes.')
+    parser.add_argument('-w', '--workers', type=int, default=8, help='workers for the lightning trainer.')
+    parser.add_argument('--cpu-only', action='store_true', help="don't train on GPUs.")
+
+    args = parser.parse_args()
+
+    #  Loading data
+    with open(args.data, 'rb') as data_file:
+        train = pickle.load(data_file)
+        val = None
+    if args.eval:
+        val = train
+    if args.val_data:
+        with open(args.val_data, 'rb') as val_data_file:
+            val = pickle.load(val_data_file)
+
+    # Instantiating model
+
+    # pl.seed_everything(1728) # TODO This alone doesn't seem to work
+
+    model = Net(train[0][0][0].shape[1],
+                len(args.gen_attr),
+                vocab_size=args.vocab_size,  # vocab size=81 + ix: 0 = pad, len+1 = UKN, len+2 = END, len+3 = SOS
+                hidden_size=args.hidden_size,
+                dropout_rate=args.dropout,
+                lr=args.lr,
+                context=(0 if args.no_ctx_train else args.context),
+                window=(0 if args.no_ctx_train else args.stride),
+                scheduler_step=args.scheduler_step,
+                lr_decay_by=args.lr_decay_by,
+                dec_layers=args.dec_layers)
+
+    # Training model
+    run_with_args(model, train, val, args)
