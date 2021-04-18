@@ -13,9 +13,9 @@ export XDG_RUNTIME_DIR=""
 export PYTHONFAULTHANDLER=1
 
 st=2021-03-18-hp200-256-ie4.pth
-val=data/mF_val_sequences.data
+val=/data/mF_val_sequences.data
 
-python seq2seq.py data/mF_train_sequences.data \
+python seq2seq.py /data/mF_train_sequences.data \
 --val-data $val \
 --model-state $st \
 --gen-attr velocity \
