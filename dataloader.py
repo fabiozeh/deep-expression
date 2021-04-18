@@ -6,9 +6,9 @@ def pitchVocabularyFmt(X, vocab_col):
     """
     Produces the tensors for training with a pitch vocabulary encoding.
     """
-    pitch = torch.LongTensor(X[:, vocab_col])
-    score_feats = torch.cat([torch.FloatTensor(X[:, :vocab_col]),
-                            torch.FloatTensor(X[:, vocab_col + 1:])], dim=1)
+    pitch = torch.tensor(X[:, vocab_col], dtype=torch.long)
+    score_feats = torch.cat([torch.tensor(X[:, :vocab_col], dtype=torch.float),
+                            torch.tensor(X[:, vocab_col + 1:], dtype=torch.float)], dim=1)
     return pitch, score_feats
 
 
@@ -83,7 +83,7 @@ class TrainDataset(torch.utils.data.Dataset):
             Y = Y.iloc[offset:, :].to_numpy(dtype='float64')
 
         pitch, score_feats = pitchVocabularyFmt(X, self.vocab_col)
-        return pitch, score_feats, torch.FloatTensor(Y), X.shape[0]
+        return pitch, score_feats, torch.tensor(Y, dtype=torch.float), X.shape[0]
 
     @staticmethod
     def collate_fn(batch):
@@ -99,7 +99,7 @@ class TrainDataset(torch.utils.data.Dataset):
         score_feats = torch.nn.utils.rnn.pad_sequence(score_feats, batch_first=False)
         Y = torch.nn.utils.rnn.pad_sequence(Y, batch_first=False)
 
-        return pitch, score_feats, Y, torch.LongTensor(length).view(-1)
+        return pitch, score_feats, Y, torch.tensor(length, dtype=torch.long, device=torch.device('cpu')).view(-1)
 
 
 class ValidationDataset(torch.utils.data.Dataset):
@@ -208,16 +208,12 @@ class ValidationDataset(torch.utils.data.Dataset):
                     length_batch[i] = sz_last
                 xind += self.stride
 
-        if self.device is not None:
-            pitch_batch = torch.LongTensor(pitch_batch, device=self.device)
-            score_feats_batch = torch.FloatTensor(score_feats_batch, device=self.device)
-            Y_batch = torch.FloatTensor(Y_batch, device=self.device)
-        else:
-            pitch_batch = torch.LongTensor(pitch_batch)
-            score_feats_batch = torch.FloatTensor(score_feats_batch)
-            Y_batch = torch.FloatTensor(Y_batch)
+        
+        pitch_batch = torch.tensor(pitch_batch, dtype=torch.long, device=self.device)
+        score_feats_batch = torch.tensor(score_feats_batch, dtype=torch.float, device=self.device)
+        Y_batch = torch.tensor(Y_batch, dtype=torch.float, device=self.device)
 
-        return pitch_batch, score_feats_batch, Y_batch, torch.LongTensor(length_batch)
+        return pitch_batch, score_feats_batch, Y_batch, torch.tensor(length_batch, dtype=torch.long, device=torch.device('cpu'))
 
 
 class FullPieceDataset(torch.utils.data.Dataset):
@@ -244,4 +240,4 @@ class FullPieceDataset(torch.utils.data.Dataset):
 
         pitch, score_feats = pitchVocabularyFmt(X, self.vocab_col)
 
-        return pitch, score_feats, torch.FloatTensor(Y), torch.LongTensor([length]).view(-1)
+        return pitch, score_feats, torch.tensor(Y, dtype=torch.float), torch.tensor([length], dtype=torch.long, device=torch.device('cpu')).view(-1)
