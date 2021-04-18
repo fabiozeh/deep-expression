@@ -21,7 +21,7 @@ notes from musical pieces.
 
 
 class Encoder(nn.Module):
-    def __init__(self, n_x, vocab_size, embed_size, dropout):
+    def __init__(self, n_x, vocab_size, embed_size, dropout, gru_layers=1):
         super(Encoder, self).__init__()
 
         self.pitchEmbedding = nn.Embedding(num_embeddings=vocab_size, embedding_dim=embed_size, padding_idx=0)
@@ -30,7 +30,7 @@ class Encoder(nn.Module):
         self.norm1 = nn.LayerNorm(2 * embed_size)
         self.ff = nn.Linear(2 * embed_size, 2 * embed_size)
         self.ffnorm = nn.LayerNorm(2 * embed_size)
-        self.rnn = nn.GRU(2 * embed_size, 2 * embed_size, num_layers=1, bidirectional=True)
+        self.rnn = nn.GRU(2 * embed_size, 2 * embed_size, num_layers=gru_layers, bidirectional=True)
         self.drop2 = nn.Dropout(dropout)
         self.norm2 = nn.LayerNorm(4 * embed_size)
 
@@ -80,7 +80,7 @@ class Decoder(nn.Module):
 class Net(pl.LightningModule):
 
     def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4,
-                 context=0, window=0, scheduler_step=10000, lr_decay_by=0.9, dec_layers=1):
+                 context=0, window=0, scheduler_step=10000, lr_decay_by=0.9, dec_layers=1, enc_layers=1):
         super(Net, self).__init__()
 
         assert hidden_size % 2 == 0, "hidden_size must be multiple of 2"
@@ -89,7 +89,7 @@ class Net(pl.LightningModule):
 
         self.rng = np.random.default_rng()
 
-        self.encoder = Encoder(n_x, vocab_size, int(hidden_size / 2), dropout_rate)
+        self.encoder = Encoder(n_x, vocab_size, int(hidden_size / 2), dropout_rate, gru_layers=enc_layers)
         self.decoder = Decoder(n_y, hidden_size, 2 * hidden_size, dropout_rate, gru_layers=dec_layers)
 
     def forward(self, pitch, score_feats, lengths):
@@ -302,6 +302,7 @@ if __name__ == "__main__":
     parser.add_argument('-l', '--seq-len', type=int, default=32, help='number of notes read by model at once.')
     parser.add_argument('-s', '--hidden-size', type=int, default=64, help='size of hidden model layers.')
     parser.add_argument('--dec-layers', type=int, default=1, help='number of recurrent layers in decoder.')
+    parser.add_argument('--enc-layers', type=int, default=1, help='number of recurrent layers in encoder.')
     parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
     parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
     parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
@@ -340,7 +341,8 @@ if __name__ == "__main__":
                 window=(0 if args.no_ctx_train else args.stride),
                 scheduler_step=args.scheduler_step,
                 lr_decay_by=args.lr_decay_by,
-                dec_layers=args.dec_layers)
+                dec_layers=args.dec_layers,
+                enc_layers=args.enc_layers)
 
     # Training model
     run_with_args(model, train, val, args)
