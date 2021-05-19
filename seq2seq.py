@@ -216,12 +216,12 @@ def run_with_args(model, train, val, args):
         if args.cpu_only:
             trainer = pl.Trainer(fast_dev_run=args.dev_run,
                                  progress_bar_refresh_rate=100, max_epochs=args.epochs,
-                                 val_check_interval=0.01)
+                                 max_steps=args.max_steps, val_check_interval=500)
         else:
             trainer = pl.Trainer(gpus=-1, accelerator='ddp', fast_dev_run=args.dev_run,
                                  plugins=pl.plugins.DDPPlugin(find_unused_parameters=False),
                                  progress_bar_refresh_rate=100, max_epochs=args.epochs,
-                                 val_check_interval=0.01)
+                                 max_steps=args.max_steps, val_check_interval=500)
 
         if args.seq_len == 0:
             train_ds = dl.FullPieceDataset(train,
@@ -272,17 +272,16 @@ def run_with_args(model, train, val, args):
         # Saving model
         torch.save(model.state_dict(), args.model_state)
 
-    else:
-        # Load model
-        model.load_state_dict(torch.load(args.model_state))
-        model.eval()
+    # Load model
+    model.load_state_dict(torch.load(args.model_state))
+    model.eval()
 
-        _, mse = evaluation(val, args.seq_len, model, output_cols=args.gen_attr,
-                            stride=args.stride, context=args.context,
-                            pad_both_ends=(not args.no_ctx_train))
+    _, mse = evaluation(val, args.seq_len, model, output_cols=args.gen_attr,
+                        stride=args.stride, context=args.context,
+                        pad_both_ends=(not args.no_ctx_train))
 
-        for i, col in enumerate(args.gen_attr):
-            print('Validation set MSE for ' + col + ': ' + str(np.mean(mse[:, i])))
+    for i, col in enumerate(args.gen_attr):
+        print('Validation set MSE for ' + col + ': ' + str(np.mean(mse[:, i])))
 
 
 if __name__ == "__main__":
@@ -297,7 +296,7 @@ if __name__ == "__main__":
                         choices=('ioiRatio', 'peakLevel', 'localTempo', 'timingDev', 'timingDevLocal', 'durationSecs', 'velocity'),
                         default=['ioiRatio', 'peakLevel', 'durationSecs'],
                         help='expressive attributes to learn/generate.')
-    parser.add_argument('--vocab-size', type=int, default=85, help='pitch vocabulary size.')
+    parser.add_argument('--vocab-size', type=int, default=92, help='pitch vocabulary size.')
     parser.add_argument('-r', '--lr', type=float, default=1e-5, help='learning rate for training.')
     parser.add_argument('-l', '--seq-len', type=int, default=32, help='number of notes read by model at once.')
     parser.add_argument('-s', '--hidden-size', type=int, default=64, help='size of hidden model layers.')
@@ -305,7 +304,8 @@ if __name__ == "__main__":
     parser.add_argument('--enc-layers', type=int, default=1, help='number of recurrent layers in encoder.')
     parser.add_argument('-d', '--dropout', type=float, default=0.1, help='model dropout rate.')
     parser.add_argument('-b', '--batch-size', type=int, default=128, help='mini-batch size.')
-    parser.add_argument('-e', '--epochs', type=int, default=5, help='number of training epochs.')
+    parser.add_argument('-e', '--epochs', type=int, default=100, help='max. number of training epochs.')
+    parser.add_argument('--max-steps', type=int, default=None, help='max. number of training steps.')
     parser.add_argument('--scheduler-step', type=int, default=10000, help='steps between lr decays.')
     parser.add_argument('--lr-decay-by', type=float, default=0.9, help='lr decay rate on scheduler steps.')
     parser.add_argument('--stride', type=int, default=24, help='the stride in the notes sliding window.')

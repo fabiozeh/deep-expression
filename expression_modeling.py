@@ -416,6 +416,47 @@ def buildNoteDataframeFromPerfMidi(midi):
     return df
 
 
+def buildSimpleNoteDataframe(piece, transpose=0):
+    df = {
+        'beatDiff': [],         # beats since last onset
+        'instrument': [],       # MIDI number of instrument
+        'pitch': [],            # MIDI pitch of instrument
+        "duration": [],         # note duration in beats
+        "ioi": [],              # beats since last note of this instrument
+        "startTime": [],        # onset time in s
+        "durationSecs": [],     # note duration in s
+        "ioiRatio": [],         # ioi in s / ioi in beats (local tempo estimate)
+        "timingDev": [],        # total onset deviation time assuming steady tempo
+        "timingDevLocal": [],   # onset deviation time from local tempo
+        "localTempo": [],       # moving average of tempo before onset
+        "peakLevel": [],        # peak performance dBu within note duration
+    }
+
+    for i, n in enumerate(piece.part):
+        if i > 0:
+            df['beatDiff'].append(n.startBeat - piece.part[i - 1].startBeat)
+        else:
+            df['beatDiff'].append(n.startBeat)
+        df['instrument'].append(n.instrument)
+        df['pitch'].append(n.pitch + transpose)
+        df['duration'].append(n.durBeats)
+        df['ioi'].append(n.ioiBeats)
+        df['startTime'].append(n.startTime)
+        df['durationSecs'].append(n.durS)
+        df['ioiRatio'].append(n.ioiS / (n.ioiBeats + 1e-6))
+        df['timingDev'].append(n.timingDev)
+        df['timingDevLocal'].append(n.timingDevLocal)
+        df['localTempo'].append(np.log(n.localTempo))
+        peak = -1000
+        for lvl in n.levels:
+            peak = lvl if lvl > peak else peak
+        df['peakLevel'].append(peak)
+
+    df = pd.DataFrame(data=df)
+
+    return df
+
+
 def buildNoteLevelDataframe(piece, transpose=0):
     df = {
         'beatDiff': [],         # beats since last onset
@@ -517,23 +558,32 @@ def midi_performance(test, prediction, moments, ix_to_lex, method='ioiRatio'):
 
         ioiRatio = prediction[:, 0] * test[2][2, 1] + test[2][2, 0]
 
-        if (prediction.shape[1] > 1):
+        if prediction.shape[1] > 1:
             durSecs = prediction[:, 1] * moments['durationSecs'][1] + moments['durationSecs'][0]
         else:
+            print("Using test durations.")
             durSecs = test[1].durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0]
+
+        if prediction.shape[1] > 2:
+            if 'velocity' in moments:
+                vel = prediction[:, 2] * moments['velocity'][1] + moments['velocity'][0]
+            elif 'peakLevel' in moments:
+                vel = prediction[:, 2] * moments['peakLevel'][1] + moments['peakLevel'][0]
+        else:
+            vel = [100] * prediction.shape[0]
 
         ioi = 0
         start = 0.
-        for x, devT, devD in zip(test[0].itertuples(), ioiRatio, durSecs):
+        for x, devT, devD, v in zip(test[0].itertuples(), ioiRatio, durSecs, vel):
             pitch = ix_to_lex.get(x.pitch)
             if pitch:
                 pitch = pitch[0]
                 start += (x.beatDiff * moments['beatDiff'][1] + moments['beatDiff'][0] + 1e-6) * ioi
                 end = start + devD
                 if x.instrument_1:
-                    piano.notes.append(pretty_midi.Note(100, pitch, start, end))
+                    piano.notes.append(pretty_midi.Note(v, pitch, start, end))
                 else:
-                    violin.notes.append(pretty_midi.Note(100, pitch, start, end))
+                    violin.notes.append(pretty_midi.Note(v, pitch, start, end))
                 ioi = devT
 
     elif method == 'timingDevLocal':

@@ -208,7 +208,6 @@ class ValidationDataset(torch.utils.data.Dataset):
                     length_batch[i] = sz_last
                 xind += self.stride
 
-        
         pitch_batch = torch.tensor(pitch_batch, dtype=torch.long, device=self.device)
         score_feats_batch = torch.tensor(score_feats_batch, dtype=torch.float, device=self.device)
         Y_batch = torch.tensor(Y_batch, dtype=torch.float, device=self.device)
