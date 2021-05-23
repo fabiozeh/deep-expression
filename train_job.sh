@@ -59,5 +59,5 @@ echo Training Finished for model $st
 # --stride 50 \
 # --context 5
 
-RES=$(tail hpc_logs/%x-%j.out | sed -n "s/^.*MSE for \(.*\)\$/\1/p") 
-source to_notion.sh $st %j $RES
+RES=$(tail hpc_logs/ExprModl-$SLURM_JOB_ID.out | sed -n "s/^.*MSE for \(.*\)\$/\1/p") 
+source to_notion.sh $st $SLURM_JOB_ID "$RES" > /dev/null
