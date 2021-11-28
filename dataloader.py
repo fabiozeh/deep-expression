@@ -2,13 +2,14 @@ import torch
 import numpy as np
 
 
-def pitchVocabularyFmt(X, vocab_col):
+def pitchVocabularyFmt(X, vocab_col, feats_cols, inst_col=None):
     """
     Produces the tensors for training with a pitch vocabulary encoding.
     """
     pitch = torch.tensor(X[:, vocab_col], dtype=torch.long)
     score_feats = torch.cat([torch.tensor(X[:, :vocab_col], dtype=torch.float),
                             torch.tensor(X[:, vocab_col + 1:], dtype=torch.float)], dim=1)
+
     return pitch, score_feats
 
 
@@ -18,21 +19,27 @@ class TrainDataset(torch.utils.data.Dataset):
     Pieces are split in shorter sequences beginning in each existing note for maximum
     data augmentation.
     _data_ should be in the format stored by the 'sequence preparation' notebook.
-    _vocab_col_ is the index of the column corresponding to the lexical vocabulary of the
-        dependent variable pandas array.
     _sequence_length_ is the integer length of sequences to be passed to the model.
     _output_cols_ is a subset of the independent variable array column names provided as
         a string list. Default: all columns
+    _split_inst_ if True, outputs the one-hot vector of instrument separate from
+        other score features.
     _context_ is an integer number of sequence steps that will be read by the model to
         provide context for predictions, so no prediction will be generated for them.
         This class will pad the start of pieces so the model can also learn to predict
         the first _context_ notes of a piece. Default: no context (don't pad).
     _dummy_ if True will restrict the length to 32 instances for testing.
     """
-    def __init__(self, data, vocab_col, sequence_length, output_cols=None, context=0, dummy=False):
+    def __init__(self, data, sequence_length, output_cols=None, split_inst=False, context=0, dummy=False):
         self.data = data
         self.sequence_length = sequence_length
-        self.vocab_col = vocab_col
+        self.vocab_col = data[0][0][0].columns.get_loc("pitch")
+        if split_inst:
+            self.inst_cols = [data[0][0][0].columns.get_loc(n) for n in data[0][0][0].columns if 'instrument' in n]
+            self.feats_cols = [k for k in list(range(data[0][0][0].shape[1])) if k not in self.inst_cols and k != self.vocab_col]
+        else:
+            self.inst_cols = None
+            self.feats_cols = [k for k in list(range(data[0][0][0].shape[1])) if k != self.vocab_col]
         self.dummy = dummy
         self.indexes = []
         if output_cols is None:
@@ -82,7 +89,7 @@ class TrainDataset(torch.utils.data.Dataset):
             X = X.iloc[offset:, :].to_numpy(dtype='float64')
             Y = Y.iloc[offset:, :].to_numpy(dtype='float64')
 
-        pitch, score_feats = pitchVocabularyFmt(X, self.vocab_col)
+        pitch, score_feats = pitchVocabularyFmt(X, self.vocab_col, self.feats_cols, self.inst_cols)
         return pitch, score_feats, torch.tensor(Y, dtype=torch.float), X.shape[0]
 
     @staticmethod
@@ -240,3 +247,92 @@ class FullPieceDataset(torch.utils.data.Dataset):
         pitch, score_feats = pitchVocabularyFmt(X, self.vocab_col)
 
         return pitch, score_feats, torch.tensor(Y, dtype=torch.float), torch.tensor([length], dtype=torch.long, device=torch.device('cpu')).view(-1)
+
+class TransferTrainDataset(torch.utils.data.Dataset):
+    """
+    This class prepares the provided data for training in a sequence to sequence model.
+    Pieces are split in shorter sequences beginning in each existing note for maximum
+    data augmentation.
+    _data_ should be in the format stored by the 'sequence preparation' notebook.
+    _sequence_length_ is the integer length of sequences to be passed to the model.
+    _output_cols_ is a subset of the independent variable array column names provided as
+        a string list. Default: all columns
+    _context_ is an integer number of sequence steps that will be read by the model to
+        provide context for predictions, so no prediction will be generated for them.
+        This class will pad the start of pieces so the model can also learn to predict
+        the first _context_ notes of a piece. Default: no context (don't pad).
+    _dummy_ if True will restrict the length to 32 instances for testing.
+    """
+    def __init__(self, data, sequence_length, output_cols=None, context=0, dummy=False):
+        self.data = data
+        self.sequence_length = sequence_length
+        self.vocab_col = data[0][0][0].columns.get_loc("pitch")
+        self.inst_col = [data[0][0][0].columns.get_loc(n) for n in data[0][0][0].columns if 'instrument' in n]
+        self.dummy = dummy
+        self.indexes = []
+        if output_cols is None:
+            self.output_cols = data[0][0][1].columns
+        else:
+            self.output_cols = output_cols
+        for si, s in enumerate(data):
+            x = s[0][0]
+            tx = x.shape[0] + context
+            xind = -context
+            self.indexes.append((si, xind))
+            while tx > 1:
+                xind += 1
+                tx -= 1
+                self.indexes.append((si, xind))
+        np.random.shuffle(self.indexes)  # always shuffle once
+
+    def __len__(self):
+        if self.dummy:
+            return 32
+        else:
+            return len(self.indexes)
+
+    def __getitem__(self, index):
+        (seq, offset) = self.indexes[index]
+        (X, Y, _) = self.data[seq][0]
+        Y = Y.loc[:, self.output_cols]
+        if offset < 0:
+            if offset + self.sequence_length <= X.shape[0]:
+                Xp = np.zeros((self.sequence_length, X.shape[1]), dtype='float64')
+                Yp = np.zeros((self.sequence_length, Y.shape[1]), dtype='float64')
+                Xp[-offset:, :] = X.iloc[:offset + self.sequence_length, :].to_numpy(dtype='float64')
+                Yp[-offset:, :] = Y.iloc[:offset + self.sequence_length, :].to_numpy(dtype='float64')
+                X = Xp
+                Y = Yp
+            else:
+                Xp = np.zeros((X.shape[0] - offset, X.shape[1]), dtype='float64')
+                Yp = np.zeros((X.shape[0] - offset, Y.shape[1]), dtype='float64')
+                Xp[-offset:, :] = X.to_numpy(dtype='float64')
+                Yp[-offset:, :] = Y.to_numpy(dtype='float64')
+                X = Xp
+                Y = Yp
+        elif offset + self.sequence_length <= X.shape[0]:
+            X = X.iloc[offset:offset + self.sequence_length, :].to_numpy(dtype='float64')
+            Y = Y.iloc[offset:offset + self.sequence_length, :].to_numpy(dtype='float64')
+        else:
+            X = X.iloc[offset:, :].to_numpy(dtype='float64')
+            Y = Y.iloc[offset:, :].to_numpy(dtype='float64')
+
+        pitch, score_feats = pitchVocabularyFmt(X, self.vocab_col)
+        return pitch, score_feats, torch.tensor(Y, dtype=torch.float), X.shape[0]
+
+    @staticmethod
+    def collate_fn(batch):
+        pitch, score_feats, Y, length = (
+            [element[0] for element in batch],
+            [element[1] for element in batch],
+            [element[2] for element in batch],
+            [element[3] for element in batch],
+        )
+
+        # Pad batch
+        pitch = torch.nn.utils.rnn.pad_sequence(pitch, batch_first=False)
+        score_feats = torch.nn.utils.rnn.pad_sequence(score_feats, batch_first=False)
+        Y = torch.nn.utils.rnn.pad_sequence(Y, batch_first=False)
+
+        return pitch, score_feats, Y, torch.tensor(length, dtype=torch.long, device=torch.device('cpu')).view(-1)
+
