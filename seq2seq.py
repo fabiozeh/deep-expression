@@ -79,8 +79,8 @@ class Decoder(nn.Module):
 
 class Net(pl.LightningModule):
 
-    def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4,
-                 context=0, window=0, scheduler_step=10000, lr_decay_by=0.9, dec_layers=1, enc_layers=1):
+    def __init__(self, n_x, n_y, vocab_size, hidden_size=64, dropout_rate=0.1, lr=1e-4, context=0, window=0,
+                 scheduler_step=10000, lr_decay_by=0.9, dec_layers=1, enc_layers=1, teacher_forcing=0.5):
         super(Net, self).__init__()
 
         assert hidden_size % 2 == 0, "hidden_size must be multiple of 2"
@@ -120,15 +120,13 @@ class Net(pl.LightningModule):
         src_vec, encoded_score = self.encoder(pitch, score_feats, lengths)
 
         # iterate generating y
-        teacher_forcing_ratio = 0.5
-
         hidden = torch.zeros((self.hparams.dec_layers, score_feats.shape[1], self.hparams.hidden_size), device=self.device)
         y_hat = torch.zeros((y.shape[0], y.shape[1], self.hparams.n_y), device=self.device)
         prev_y = torch.zeros((1, score_feats.shape[1], self.hparams.n_y), device=self.device)
         for i in range(pitch.shape[0]):
             prev_y, hidden = self.decoder(src_vec[i, :, :].unsqueeze(0), prev_y, encoded_score, hidden)
             y_hat[i, :, :] = prev_y
-            if self.rng.random() > teacher_forcing_ratio:
+            if self.rng.random() < self.hparams.teacher_forcing:
                 prev_y = y[i, :, :].view(1, -1, self.hparams.n_y)
 
         if self.hparams.window:
@@ -308,6 +306,7 @@ if __name__ == "__main__":
     parser.add_argument('--max-steps', type=int, default=None, help='max. number of training steps.')
     parser.add_argument('--scheduler-step', type=int, default=10000, help='steps between lr decays.')
     parser.add_argument('--lr-decay-by', type=float, default=0.9, help='lr decay rate on scheduler steps.')
+    parser.add_argument('--teacher-forcing', type=float, default=0.5, help='fraction of outputs replaced by real values in training.')
     parser.add_argument('--stride', type=int, default=24, help='the stride in the notes sliding window.')
     parser.add_argument('--context', type=int, default=4, help='no. of notes ignored at window start.')
     parser.add_argument('--no-ctx-train', action='store_true', help='ignore context when training.')
@@ -342,7 +341,8 @@ if __name__ == "__main__":
                 scheduler_step=args.scheduler_step,
                 lr_decay_by=args.lr_decay_by,
                 dec_layers=args.dec_layers,
-                enc_layers=args.enc_layers)
+                enc_layers=args.enc_layers,
+                teacher_forcing=args.teacher_forcing)
 
     # Training model
     run_with_args(model, train, val, args)
