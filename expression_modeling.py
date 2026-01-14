@@ -544,8 +544,8 @@ def midi_performance(test, prediction, moments, ix_to_lex, method='ioiRatio'):
     given numpy array of performance actions. Method specifies which measurement
     of tempo and timing deviations was used.
     """
-    tempo = math.exp(test[1].localTempo.iloc[0] * test[2][0, 1] + test[2][0, 0])
-    pm = pretty_midi.PrettyMIDI(initial_tempo=tempo)
+    #tempo = math.exp(test[1].localTempo.iloc[0] * test[2][0, 1] + test[2][0, 0])
+    pm = pretty_midi.PrettyMIDI(initial_tempo=100)
     piano = pretty_midi.Instrument(1, is_drum=False, name='piano')
     violin = pretty_midi.Instrument(41, is_drum=False, name='violin')
     pm.instruments.append(piano)
@@ -602,6 +602,18 @@ def midi_performance(test, prediction, moments, ix_to_lex, method='ioiRatio'):
                     piano.notes.append(note)
                 else:
                     violin.notes.append(note)
+    
+    elif method == 'velocity':
+        velocity =  prediction[:, 0] * test[2][0, 1] + test[2][0, 0]
+        durSecs = test[0].durationSecs * moments['durationSecs'][1] + moments['durationSecs'][0]
+        start = 0.
+        for x, d, v in zip(test[0].itertuples(), durSecs, velocity):
+            pitch = ix_to_lex.get(x.pitch)
+            if pitch:
+                pitch = pitch[0]
+                start += (x.onsetDiff * moments['onsetDiff'][1] + moments['onsetDiff'][0] + 1e-6)
+                end = start + d
+                piano.notes.append(pretty_midi.Note(int(v), pitch, start, end))
     else:
         raise ValueError("Unknown method")
 

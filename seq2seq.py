@@ -17,6 +17,9 @@ a deep artificial neural network for generating onset timing deviation and peak 
 notes from musical pieces.
 """
 
+# win bug workaround
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
 # Defining the neural network
 
 
